@@ -78,7 +78,7 @@ class MainActivity : AppCompatActivity() {
     // Auto-Hide Timer
     private val hideNavRunnable = Runnable { hideNavBar() }
     private val hideCategoryRunnable = Runnable { hideCategoryBar() }
-    private val NAV_AUTO_HIDE_MS = 4000L
+    private val NAV_AUTO_HIDE_MS = 8000L
     private val CATEGORY_AUTO_HIDE_MS = 5000L
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -229,6 +229,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 binding.progressBar.visibility = View.GONE
                 injectComfortScripts()
+                injectVideoClickInterceptor()
                 autoPlayVideo()
 
                 if (isSplashVisible) {
@@ -320,6 +321,9 @@ class MainActivity : AppCompatActivity() {
                 .setInterpolator(DecelerateInterpolator())
                 .start()
         }
+        // Focus auf ersten Button setzen (FireTV)
+        binding.btnHome.requestFocus()
+        // Auto-Hide Timer zuruecksetzen
         handler.removeCallbacks(hideNavRunnable)
         handler.postDelayed(hideNavRunnable, NAV_AUTO_HIDE_MS)
     }
@@ -399,10 +403,20 @@ class MainActivity : AppCompatActivity() {
             "trafficjunky.com", "trafficfactory.biz", "popads.net",
             "popcash.net", "propellerads.com", "adsterra.com",
             "clickadu.com", "hilltopads.com", "tsyndicate.com",
-            "ad-maven.com", "admaven.com", "taboola.com", "outbrain.com"
+            "ad-maven.com", "admaven.com", "taboola.com", "outbrain.com",
+            "syndication.", "prebid.", "openx.net", "pubmatic.com",
+            "advertising.com", "spotxchange.com", "serving-sys.com",
+            "revcontent.com", "mgid.com", "zedo.com"
         )
-        val adPaths = listOf("/ads/", "/ad/", "/adserver", "/adframe", "/banner", "/popup", "/popunder")
-        return adDomains.any { lower.contains(it) } || adPaths.any { lower.contains(it) }
+        val adPaths = listOf(
+            "/ads/", "/ad/", "/adserver", "/adframe", "/banner",
+            "/popup", "/popunder", "/preroll", "/midroll", "/vast/",
+            "/vpaid/", "/sponsor/", "/promo/ad"
+        )
+        val adPatterns = listOf("_ad_", "-ad-", "ad_tag", "adtag", "vast.xml", "vpaid")
+        return adDomains.any { lower.contains(it) } ||
+               adPaths.any { lower.contains(it) } ||
+               adPatterns.any { lower.contains(it) }
     }
 
     // ==================== COMFORT SCRIPTS ====================
@@ -800,35 +814,65 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (!::webView.isInitialized) return super.onKeyDown(keyCode, event)
+
+        // Wenn Nav-Bar oder Category-Bar sichtbar ist: D-Pad steuert die Buttons
+        if (isNavVisible || isCategoryVisible) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    // Auto-Hide Timer zuruecksetzen bei Navigation
+                    if (isNavVisible) {
+                        handler.removeCallbacks(hideNavRunnable)
+                        handler.postDelayed(hideNavRunnable, NAV_AUTO_HIDE_MS)
+                    }
+                    if (isCategoryVisible) {
+                        handler.removeCallbacks(hideCategoryRunnable)
+                        handler.postDelayed(hideCategoryRunnable, CATEGORY_AUTO_HIDE_MS)
+                    }
+                    // Focus-Navigation dem Android-System ueberlassen
+                    return super.onKeyDown(keyCode, event)
+                }
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (isNavVisible) { hideNavBar(); showCategoryBar(); return true }
+                    return super.onKeyDown(keyCode, event)
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (isCategoryVisible) { hideCategoryBar(); return true }
+                    if (isNavVisible) { hideNavBar(); return true }
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    // Click auf fokussierten Button - Android-System handeln lassen
+                    return super.onKeyDown(keyCode, event)
+                }
+                KeyEvent.KEYCODE_BACK -> {
+                    if (isNavVisible) { hideNavBar(); return true }
+                    if (isCategoryVisible) { hideCategoryBar(); return true }
+                }
+            }
+        }
+
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> {
-                if (isNavVisible) { hideNavBar(); showCategoryBar(); return true }
                 if (!isCategoryVisible) { showCategoryBar(); return true }
                 scrollWebView("up", 300)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (isCategoryVisible) { hideCategoryBar(); return true }
-                if (!isNavVisible && !isCategoryVisible) { showNavBar(); return true }
+                if (!isNavVisible) { showNavBar(); return true }
                 scrollWebView("down", 300)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (isNavVisible || isCategoryVisible) return super.onKeyDown(keyCode, event)
                 scrollWebView("left", 200)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (isNavVisible || isCategoryVisible) return super.onKeyDown(keyCode, event)
                 scrollWebView("right", 200)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                if (!isNavVisible && !isCategoryVisible) {
-                    clickFocusedElement()
-                    return true
-                }
-                return super.onKeyDown(keyCode, event)
+                clickFocusedElement()
+                return true
             }
             KeyEvent.KEYCODE_BACK -> {
                 if (isFullScreen) { customViewCallback?.onCustomViewHidden(); return true }
@@ -914,7 +958,9 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun playInExoPlayer(url: String) {
             CoroutineScope(Dispatchers.Main).launch {
-                launchExoPlayer(url)
+                if (!isAdUrl(url)) {
+                    launchExoPlayer(url)
+                }
             }
         }
 
@@ -965,33 +1011,115 @@ class MainActivity : AppCompatActivity() {
     // ==================== EXOPLAYER LAUNCH ====================
 
     private fun autoPlayVideo() {
-        // Suche Video-URL auf der Seite und starte ExoPlayer
-        webView.evaluateJavascript("""
-            (function() {
-                // Video-Element pruefen
-                var v = document.querySelector('video');
-                if (v) {
-                    // Video im WebView pausieren
-                    v.pause();
-                    var s = v.currentSrc || v.src;
-                    if (s && s.indexOf('blob:') !== 0) return s;
-                    // Source-Tags pruefen
-                    var sources = v.querySelectorAll('source');
-                    for (var i = 0; i < sources.length; i++) {
-                        if (sources[i].src && sources[i].src.indexOf('blob:') !== 0) return sources[i].src;
+        // Nur auf echten Video-Seiten starten (nicht Uebersichtsseiten)
+        // Warte kurz bis die Seite fertig geladen hat und Video-URLs aufgetaucht sind
+        handler.postDelayed({
+            if (!::webView.isInitialized) return@postDelayed
+
+            webView.evaluateJavascript("""
+                (function() {
+                    // Pruefen ob das eine Video-Einzelseite ist (nicht Uebersicht)
+                    var isVideoPage = false;
+
+                    // Hat die Seite einen grossen Video-Player?
+                    var v = document.querySelector('video');
+                    if (v) {
+                        var rect = v.getBoundingClientRect();
+                        // Video muss sichtbar und gross genug sein (kein Thumbnail)
+                        if (rect.width > 200 && rect.height > 150) isVideoPage = true;
+                    }
+
+                    // URL-Heuristik: Video-Einzelseiten haben oft /video/, /watch/, /embed/ etc.
+                    var loc = window.location.href.toLowerCase();
+                    if (loc.match(/\/(video|watch|embed|play|clip|view)\//)) isVideoPage = true;
+                    if (loc.match(/\/(video|watch|embed|play|clip|view)\?/)) isVideoPage = true;
+
+                    if (!isVideoPage) return 'not_video_page';
+
+                    // Video-URL holen (NICHT blob:)
+                    if (v) {
+                        v.pause();
+                        var s = v.currentSrc || v.src;
+                        if (s && s.indexOf('blob:') !== 0) return s;
+                        var sources = v.querySelectorAll('source');
+                        for (var i = 0; i < sources.length; i++) {
+                            if (sources[i].src && sources[i].src.indexOf('blob:') !== 0) return sources[i].src;
+                        }
+                    }
+
+                    // Tracked URLs
+                    if (window._btbfStreamUrls && window._btbfStreamUrls.length > 0) return window._btbfStreamUrls[0];
+                    if (window._btbfVideoUrls && window._btbfVideoUrls.length > 0) return window._btbfVideoUrls[0];
+
+                    return 'no_url_yet';
+                })();
+            """.trimIndent()) { result ->
+                val url = result?.trim()?.removeSurrounding("\"")
+                if (!url.isNullOrEmpty() && url != "null" && url != "not_video_page" && url != "no_url_yet") {
+                    if (!isAdUrl(url)) {
+                        launchExoPlayer(url)
                     }
                 }
-                // Tracked URLs pruefen
-                if (window._btbfStreamUrls && window._btbfStreamUrls.length > 0) return window._btbfStreamUrls[0];
-                if (window._btbfVideoUrls && window._btbfVideoUrls.length > 0) return window._btbfVideoUrls[0];
-                return null;
-            })();
-        """.trimIndent()) { result ->
-            val url = result?.trim()?.removeSurrounding("\"")
-            if (!url.isNullOrEmpty() && url != "null") {
-                launchExoPlayer(url)
             }
-        }
+        }, 2000) // 2 Sekunden warten
+    }
+
+    private fun injectVideoClickInterceptor() {
+        // Faengt Video-Play-Events ab und leitet an ExoPlayer weiter
+        webView.evaluateJavascript("""
+            (function() {
+                if (window._btbfClickInterceptor) return;
+                window._btbfClickInterceptor = true;
+
+                var adDomains = ['exoclick','exosrv','juicyads','trafficjunky','trafficfactory',
+                    'popads','adsterra','clickadu','hilltopads','doubleclick','googlesyndication',
+                    'adnxs','adsrvr','propellerads','popcash','admaven','ad-maven'];
+
+                function isAdVideo(url) {
+                    if (!url) return true;
+                    var l = url.toLowerCase();
+                    for (var i = 0; i < adDomains.length; i++) {
+                        if (l.indexOf(adDomains[i]) !== -1) return true;
+                    }
+                    if (l.indexOf('/ads/') !== -1 || l.indexOf('/ad/') !== -1 || l.indexOf('preroll') !== -1 ||
+                        l.indexOf('vast.xml') !== -1 || l.indexOf('vpaid') !== -1) return true;
+                    return false;
+                }
+
+                function isMainPlayer(v) {
+                    // Pruefen ob das Video der Haupt-Player ist (gross genug)
+                    var rect = v.getBoundingClientRect();
+                    return rect.width > 200 && rect.height > 100;
+                }
+
+                // Wenn ein Video zu spielen beginnt: pausieren und an ExoPlayer senden
+                document.addEventListener('play', function(e) {
+                    var v = e.target;
+                    if (!v || v.tagName !== 'VIDEO') return;
+                    if (!isMainPlayer(v)) return; // Kleine Thumbnails/Previews ignorieren
+
+                    setTimeout(function() {
+                        var url = v.currentSrc || v.src;
+
+                        // Blob-URLs: Tracked URLs verwenden
+                        if (!url || url.indexOf('blob:') === 0) {
+                            if (window._btbfStreamUrls && window._btbfStreamUrls.length > 0) {
+                                url = window._btbfStreamUrls[window._btbfStreamUrls.length - 1];
+                            } else if (window._btbfVideoUrls && window._btbfVideoUrls.length > 0) {
+                                url = window._btbfVideoUrls[window._btbfVideoUrls.length - 1];
+                            } else {
+                                return; // Keine URL gefunden
+                            }
+                        }
+
+                        if (!isAdVideo(url)) {
+                            v.pause();
+                            try { AndroidInterface.playInExoPlayer(url); } catch(e) {}
+                        }
+                    }, 800);
+                }, true);
+            })();
+        """.trimIndent(), null)
     }
 
     private fun manualPlayVideo() {
