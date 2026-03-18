@@ -53,7 +53,15 @@ class MainActivity : AppCompatActivity() {
     private var isCategoryVisible = false
     private var isSplashVisible = true
 
-    private val websiteUrl = "https://de.borntobefuck.com/"
+    // Site-Konfiguration
+    private data class SiteConfig(val name: String, val url: String, val domain: String)
+    private val sites = listOf(
+        SiteConfig("BTBF", "https://de.borntobefuck.com/", "borntobefuck"),
+        SiteConfig("CamCaps", "https://camcaps.tv/", "camcaps.tv"),
+        SiteConfig("FyxXR", "https://fyxxr.com/", "fyxxr.com")
+    )
+    private var websiteUrl = ""
+    private var currentSiteDomain = ""
     private val storagePermissionCode = 100
     private lateinit var favoritesManager: FavoritesManager
     private lateinit var videoDownloadHelper: VideoDownloadHelper
@@ -87,10 +95,35 @@ class MainActivity : AppCompatActivity() {
         gestureDetector = GestureDetector(this, GestureListener())
 
         hideSystemUI()
-        setupWebView()
+        setupSiteSelector()
         setupButtons()
         registerDownloadReceiver()
         requestPermissions()
+    }
+
+    // ==================== SITE SELECTOR ====================
+
+    private fun setupSiteSelector() {
+        binding.btnSiteBtbf.setOnClickListener { selectSite(0) }
+        binding.btnSiteCamcaps.setOnClickListener { selectSite(1) }
+        binding.btnSiteFyxxr.setOnClickListener { selectSite(2) }
+
+        // Ersten Eintrag fokussieren (FireTV)
+        binding.btnSiteBtbf.requestFocus()
+    }
+
+    private fun selectSite(index: Int) {
+        val site = sites[index]
+        websiteUrl = site.url
+        currentSiteDomain = site.domain
+
+        // Auswahl ausblenden, Lade-Anzeige einblenden
+        binding.siteSelector.visibility = View.GONE
+        binding.loadingIndicator.visibility = View.VISIBLE
+        binding.loadingSiteName.text = site.name
+
+        // WebView jetzt erst initialisieren und laden
+        setupWebView()
     }
 
     // ==================== PERMISSIONS ====================
@@ -153,7 +186,7 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url.toString()
-                if (!url.contains("borntobefuck") && !url.startsWith("javascript:")) {
+                if (!url.contains(currentSiteDomain) && !url.startsWith("javascript:")) {
                     try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))); return true }
                     catch (_: Exception) { }
                 }
@@ -761,6 +794,7 @@ class MainActivity : AppCompatActivity() {
     // ==================== FIRETV NAVIGATION ====================
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (!::webView.isInitialized) return super.onKeyDown(keyCode, event)
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> {
                 if (isNavVisible) { hideNavBar(); showCategoryBar(); return true }
@@ -827,10 +861,24 @@ class MainActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
+        if (!::webView.isInitialized) { super.onBackPressed(); return }
         if (isFullScreen) { customViewCallback?.onCustomViewHidden(); return }
         if (isNavVisible) { hideNavBar(); return }
         if (isCategoryVisible) { hideCategoryBar(); return }
-        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+        if (webView.canGoBack()) webView.goBack() else showSiteSelectorAgain()
+    }
+
+    private fun showSiteSelectorAgain() {
+        if (::webView.isInitialized) {
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+        }
+        isSplashVisible = true
+        binding.splashOverlay.alpha = 1f
+        binding.splashOverlay.visibility = View.VISIBLE
+        binding.siteSelector.visibility = View.VISIBLE
+        binding.loadingIndicator.visibility = View.GONE
+        binding.btnSiteBtbf.requestFocus()
     }
 
     override fun onDestroy() {
@@ -840,7 +888,7 @@ class MainActivity : AppCompatActivity() {
         customViewCallback?.onCustomViewHidden()
         customView = null
         customViewCallback = null
-        webView.destroy()
+        if (::webView.isInitialized) webView.destroy()
     }
 
     // ==================== JS INTERFACE ====================

@@ -27,7 +27,7 @@
         android:background="@android:color/black"
         android:visibility="gone" />
 
-    <!-- Splash / Loading Screen Overlay -->
+    <!-- Splash / Site-Auswahl + Loading Overlay -->
     <FrameLayout
         android:id="@+id/splashOverlay"
         android:layout_width="match_parent"
@@ -35,41 +35,156 @@
         android:background="@color/splash_bg"
         android:visibility="visible">
 
+        <!-- Site-Auswahl (sichtbar beim Start) -->
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:id="@+id/siteSelector"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:gravity="center"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp"
+            android:visibility="visible">
 
             <!-- Logo -->
             <FrameLayout
-                android:layout_width="100dp"
-                android:layout_height="100dp"
-                android:layout_marginBottom="24dp">
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:layout_marginBottom="16dp">
 
                 <View
-                    android:layout_width="100dp"
-                    android:layout_height="100dp"
+                    android:layout_width="80dp"
+                    android:layout_height="80dp"
                     android:background="@drawable/splash_logo_bg" />
 
                 <ImageView
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
                     android:layout_gravity="center"
                     android:src="@drawable/ic_launcher_foreground"
                     app:tint="@color/white" />
             </FrameLayout>
 
-            <!-- App Name -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="BTBF"
-                android:textColor="@color/colorPrimary"
-                android:textSize="36sp"
+                android:text="Seite auswaehlen"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
                 android:textStyle="bold"
-                android:letterSpacing="0.15"
+                android:layout_marginBottom="24dp" />
+
+            <!-- BTBF -->
+            <LinearLayout
+                android:id="@+id/btnSiteBtbf"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/site_card_bg"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:layout_marginBottom="12dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clickable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="BTBF"
+                    android:textColor="@color/white"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Born To Be Fuck"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- CamCaps -->
+            <LinearLayout
+                android:id="@+id/btnSiteCamcaps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/site_card_bg"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:layout_marginBottom="12dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clickable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="CamCaps"
+                    android:textColor="@color/white"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Exclusive Premium Cams Content"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- FyxXR -->
+            <LinearLayout
+                android:id="@+id/btnSiteFyxxr"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/site_card_bg"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:layout_marginBottom="12dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clickable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="FyxXR"
+                    android:textColor="@color/white"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Your #1 source for german amateur clips"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Lade-Anzeige (nach Auswahl sichtbar) -->
+        <LinearLayout
+            android:id="@+id/loadingIndicator"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/loadingSiteName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/colorPrimary"
+                android:textSize="28sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.1"
                 android:layout_marginBottom="8dp" />
 
             <TextView
@@ -79,7 +194,6 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp" />
 
-            <!-- Loading Spinner -->
             <ProgressBar
                 android:id="@+id/splashProgress"
                 android:layout_width="32dp"
