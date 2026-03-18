@@ -17,6 +17,7 @@ data class VideoDetail(
     val thumbnailUrl: String = "",
     val description: String = "",
     val tags: List<String> = emptyList(),
+    val actors: List<ActorItem> = emptyList(),
     val relatedVideos: List<VideoItem> = emptyList()
 )
 
@@ -36,6 +37,26 @@ data class CategoryItem(
     val thumbnailUrl: String = "",
     val count: String = ""
 )
+
+data class ActorItem(
+    val name: String,
+    val url: String,
+    val thumbnailUrl: String = "",
+    val videoCount: String = ""
+)
+
+data class TagItem(
+    val name: String,
+    val url: String,
+    val count: String = ""
+)
+
+enum class SortOrder(val label: String, val path: String) {
+    NEWEST("Neueste", "new"),
+    TOP("Beliebteste", "top"),
+    LONGEST("Laengste", "longest"),
+    RANDOM("Zufall", "random")
+}
 
 data class PaginatedResult(
     val videos: List<VideoItem>,

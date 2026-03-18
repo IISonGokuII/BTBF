@@ -19,19 +19,25 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class BrowseActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityBrowseBinding
-    private lateinit var adapter: VideoGridAdapter
+    private lateinit var videoAdapter: VideoGridAdapter
+    private lateinit var categoryAdapter: CategoryGridAdapter
+    private lateinit var actorAdapter: ActorGridAdapter
     private lateinit var scraper: SiteScraper
     private lateinit var favoritesManager: FavoritesManager
     private lateinit var videoDownloadHelper: VideoDownloadHelper
+    private lateinit var siteUrl: String
 
     private var currentJob: Job? = null
     private var nextPageUrl: String? = null
     private var isLoadingMore = false
+
+    // Aktueller Ansichtsmodus
+    private enum class ViewMode { VIDEOS, CATEGORIES, ACTORS }
+    private var currentMode = ViewMode.VIDEOS
 
     companion object {
         const val EXTRA_SITE_NAME = "site_name"
@@ -59,7 +65,7 @@ class BrowseActivity : AppCompatActivity() {
         hideSystemUI()
 
         val siteName = intent.getStringExtra(EXTRA_SITE_NAME) ?: "BTBF"
-        val siteUrl = intent.getStringExtra(EXTRA_SITE_URL) ?: "https://de.borntobefuck.com/"
+        siteUrl = intent.getStringExtra(EXTRA_SITE_URL) ?: "https://de.borntobefuck.com/"
 
         binding.tvSiteName.text = siteName
         favoritesManager = FavoritesManager(this)
@@ -71,29 +77,41 @@ class BrowseActivity : AppCompatActivity() {
             GenericScraper(siteName, siteUrl)
         }
 
+        setupAdapters()
         setupGrid()
-        setupChips(siteUrl)
+        setupChips()
         setupSearch()
         loadHomePage()
     }
 
-    private fun setupGrid() {
-        // 3 Spalten auf TV/Tablet, 2 auf Handy
-        val spanCount = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else 3
-        val layoutManager = GridLayoutManager(this, spanCount)
-
-        adapter = VideoGridAdapter(
+    private fun setupAdapters() {
+        videoAdapter = VideoGridAdapter(
             onVideoClick = { video -> openVideo(video) },
             onVideoLongClick = { video -> showVideoOptions(video) }
         )
 
+        categoryAdapter = CategoryGridAdapter { category ->
+            switchToVideoMode()
+            loadPage(category.url)
+        }
+
+        actorAdapter = ActorGridAdapter { actor ->
+            switchToVideoMode()
+            loadPage(actor.url)
+        }
+    }
+
+    private fun setupGrid() {
+        val spanCount = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else 3
+        val layoutManager = GridLayoutManager(this, spanCount)
+
         binding.videoGrid.layoutManager = layoutManager
-        binding.videoGrid.adapter = adapter
+        binding.videoGrid.adapter = videoAdapter
 
         // Infinite Scroll
         binding.videoGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                if (dy > 0 && !isLoadingMore && nextPageUrl != null) {
+                if (dy > 0 && !isLoadingMore && nextPageUrl != null && currentMode == ViewMode.VIDEOS) {
                     val totalItems = layoutManager.itemCount
                     val lastVisible = layoutManager.findLastVisibleItemPosition()
                     if (lastVisible >= totalItems - 6) {
@@ -104,17 +122,19 @@ class BrowseActivity : AppCompatActivity() {
         })
 
         binding.btnRetry.setOnClickListener { loadHomePage() }
-
-        // Fokus für FireTV
         binding.chipHome.requestFocus()
     }
 
-    private fun setupChips(siteUrl: String) {
-        binding.chipHome.setOnClickListener { loadPage(siteUrl) }
-        binding.chipNew.setOnClickListener { loadPage("${siteUrl}new") }
-        binding.chipTop.setOnClickListener { loadPage("${siteUrl}top") }
-        binding.chipRandom.setOnClickListener { loadPage("${siteUrl}random") }
-        binding.chipCategories.setOnClickListener { showCategoriesDialog() }
+    private fun setupChips() {
+        binding.chipHome.setOnClickListener { switchToVideoMode(); loadHomePage() }
+        binding.chipNew.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.NEWEST) }
+        binding.chipTop.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.TOP) }
+        binding.chipRandom.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.RANDOM) }
+        binding.chipLongest.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.LONGEST) }
+        binding.chipCategories.setOnClickListener { showCategoriesGrid() }
+        binding.chipActors.setOnClickListener { showActorsGrid() }
+        binding.chipTags.setOnClickListener { showTagsDialog() }
+        binding.chipFavorites.setOnClickListener { showFavorites() }
     }
 
     private fun setupSearch() {
@@ -122,6 +142,7 @@ class BrowseActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
                 val query = binding.etSearch.text.toString().trim()
                 if (query.isNotEmpty()) {
+                    switchToVideoMode()
                     searchVideos(query)
                 }
                 true
@@ -129,12 +150,110 @@ class BrowseActivity : AppCompatActivity() {
         }
     }
 
+    // ==================== VIEW MODE SWITCHING ====================
+
+    private fun switchToVideoMode() {
+        if (currentMode != ViewMode.VIDEOS) {
+            currentMode = ViewMode.VIDEOS
+            binding.videoGrid.adapter = videoAdapter
+        }
+    }
+
+    private fun showCategoriesGrid() {
+        currentMode = ViewMode.CATEGORIES
+        binding.videoGrid.adapter = categoryAdapter
+        currentJob?.cancel()
+        currentJob = CoroutineScope(Dispatchers.Main).launch {
+            showLoading()
+            val categories = scraper.getCategories()
+            binding.loadingSpinner.visibility = View.GONE
+            if (categories.isEmpty()) {
+                binding.emptyState.visibility = View.VISIBLE
+                binding.videoGrid.visibility = View.GONE
+            } else {
+                binding.emptyState.visibility = View.GONE
+                binding.videoGrid.visibility = View.VISIBLE
+                categoryAdapter.setItems(categories)
+                binding.videoGrid.scrollToPosition(0)
+            }
+        }
+    }
+
+    private fun showActorsGrid() {
+        currentMode = ViewMode.ACTORS
+        binding.videoGrid.adapter = actorAdapter
+        currentJob?.cancel()
+        currentJob = CoroutineScope(Dispatchers.Main).launch {
+            showLoading()
+            val actors = scraper.getActors()
+            binding.loadingSpinner.visibility = View.GONE
+            if (actors.isEmpty()) {
+                binding.emptyState.visibility = View.VISIBLE
+                binding.videoGrid.visibility = View.GONE
+            } else {
+                binding.emptyState.visibility = View.GONE
+                binding.videoGrid.visibility = View.VISIBLE
+                actorAdapter.setItems(actors)
+                binding.videoGrid.scrollToPosition(0)
+            }
+        }
+    }
+
+    private fun showTagsDialog() {
+        Toast.makeText(this, "Lade Tags...", Toast.LENGTH_SHORT).show()
+        currentJob?.cancel()
+        currentJob = CoroutineScope(Dispatchers.Main).launch {
+            val tags = scraper.getTags()
+            if (tags.isEmpty()) {
+                Toast.makeText(this@BrowseActivity, "Keine Tags gefunden", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val names = tags.map { tag ->
+                if (tag.count.isNotEmpty()) "${tag.name} (${tag.count})" else tag.name
+            }.toTypedArray()
+            AlertDialog.Builder(this@BrowseActivity)
+                .setTitle("Tags (${tags.size})")
+                .setItems(names) { _, which ->
+                    switchToVideoMode()
+                    loadPage(tags[which].url)
+                }
+                .setNegativeButton("Abbrechen", null)
+                .show()
+        }
+    }
+
+    private fun showFavorites() {
+        switchToVideoMode()
+        val favVideos = favoritesManager.getFavoriteVideos()
+        if (favVideos.isEmpty()) {
+            Toast.makeText(this, "Keine Favoriten gespeichert", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val videoItems = favVideos.map { fav ->
+            VideoItem(
+                id = fav.id,
+                title = fav.title,
+                thumbnailUrl = fav.thumbnailUrl,
+                pageUrl = fav.id, // Wird als Page-URL gespeichert
+                duration = fav.duration
+            )
+        }
+        nextPageUrl = null
+        binding.loadingSpinner.visibility = View.GONE
+        binding.emptyState.visibility = View.GONE
+        binding.videoGrid.visibility = View.VISIBLE
+        videoAdapter.setVideos(videoItems)
+        binding.videoGrid.scrollToPosition(0)
+    }
+
+    // ==================== LOADING ====================
+
     private fun loadHomePage() {
         currentJob?.cancel()
         currentJob = CoroutineScope(Dispatchers.Main).launch {
             showLoading()
             val result = scraper.getHomePage()
-            showResults(result)
+            showVideoResults(result)
         }
     }
 
@@ -143,7 +262,16 @@ class BrowseActivity : AppCompatActivity() {
         currentJob = CoroutineScope(Dispatchers.Main).launch {
             showLoading()
             val result = scraper.getPage(url)
-            showResults(result)
+            showVideoResults(result)
+        }
+    }
+
+    private fun loadSorted(sort: SortOrder) {
+        currentJob?.cancel()
+        currentJob = CoroutineScope(Dispatchers.Main).launch {
+            showLoading()
+            val result = scraper.getSorted(sort)
+            showVideoResults(result)
         }
     }
 
@@ -152,7 +280,7 @@ class BrowseActivity : AppCompatActivity() {
         currentJob = CoroutineScope(Dispatchers.Main).launch {
             showLoading()
             val result = scraper.search(query)
-            showResults(result)
+            showVideoResults(result)
         }
     }
 
@@ -164,7 +292,7 @@ class BrowseActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.Main).launch {
             val result = scraper.getPage(url)
-            adapter.addVideos(result.videos)
+            videoAdapter.addVideos(result.videos)
             nextPageUrl = result.nextPageUrl
             isLoadingMore = false
             binding.loadMoreSpinner.visibility = View.GONE
@@ -177,7 +305,7 @@ class BrowseActivity : AppCompatActivity() {
         binding.videoGrid.visibility = View.GONE
     }
 
-    private fun showResults(result: PaginatedResult) {
+    private fun showVideoResults(result: PaginatedResult) {
         binding.loadingSpinner.visibility = View.GONE
         nextPageUrl = result.nextPageUrl
 
@@ -187,10 +315,12 @@ class BrowseActivity : AppCompatActivity() {
         } else {
             binding.emptyState.visibility = View.GONE
             binding.videoGrid.visibility = View.VISIBLE
-            adapter.setVideos(result.videos)
+            videoAdapter.setVideos(result.videos)
             binding.videoGrid.scrollToPosition(0)
         }
     }
+
+    // ==================== VIDEO ACTIONS ====================
 
     private fun openVideo(video: VideoItem) {
         Toast.makeText(this, "Lade: ${video.title}", Toast.LENGTH_SHORT).show()
@@ -198,28 +328,57 @@ class BrowseActivity : AppCompatActivity() {
         CoroutineScope(Dispatchers.Main).launch {
             val detail = scraper.getVideoDetail(video.pageUrl)
             if (detail != null && detail.videoSources.isNotEmpty()) {
-                val source = detail.videoSources.first()
-                val intent = Intent(this@BrowseActivity, VideoPlayerActivity::class.java).apply {
-                    putExtra(VideoPlayerActivity.EXTRA_VIDEO_URL, source.url)
-                    putExtra(VideoPlayerActivity.EXTRA_REFERER, video.pageUrl)
-                    putExtra(VideoPlayerActivity.EXTRA_TITLE, detail.title)
+                // Mehrere Quellen? Dialog zeigen
+                if (detail.videoSources.size > 1) {
+                    showSourcePicker(detail, video.pageUrl)
+                } else {
+                    launchPlayer(detail.videoSources.first().url, video.pageUrl, detail.title)
                 }
-                startActivity(intent)
             } else if (detail != null && detail.videoSources.isEmpty()) {
-                // Fallback: Seite im WebView öffnen
                 Toast.makeText(this@BrowseActivity,
                     "Keine direkte Video-URL gefunden. Oeffne im Browser...",
                     Toast.LENGTH_SHORT).show()
                 openInWebView(video.pageUrl)
             } else {
-                Toast.makeText(this@BrowseActivity,
-                    "Fehler beim Laden", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@BrowseActivity, "Fehler beim Laden", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    private fun showSourcePicker(detail: VideoDetail, referer: String) {
+        val labels = detail.videoSources.mapIndexed { i, src ->
+            val type = when (src.type) {
+                VideoSourceType.HLS -> "HLS"
+                VideoSourceType.DASH -> "DASH"
+                VideoSourceType.DIRECT -> when {
+                    src.url.contains(".mp4", true) -> "MP4"
+                    src.url.contains(".webm", true) -> "WEBM"
+                    else -> "Video"
+                }
+            }
+            val quality = if (src.quality.isNotEmpty()) " ${src.quality}" else ""
+            "[$type$quality] Quelle ${i + 1}"
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Qualitaet waehlen")
+            .setItems(labels) { _, which ->
+                launchPlayer(detail.videoSources[which].url, referer, detail.title)
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun launchPlayer(videoUrl: String, referer: String, title: String) {
+        val intent = Intent(this, VideoPlayerActivity::class.java).apply {
+            putExtra(VideoPlayerActivity.EXTRA_VIDEO_URL, videoUrl)
+            putExtra(VideoPlayerActivity.EXTRA_REFERER, referer)
+            putExtra(VideoPlayerActivity.EXTRA_TITLE, title)
+        }
+        startActivity(intent)
+    }
+
     private fun openInWebView(url: String) {
-        // Zurück zur MainActivity mit WebView-Fallback
         val intent = Intent(this, MainActivity::class.java).apply {
             putExtra("fallback_url", url)
         }
@@ -280,25 +439,6 @@ class BrowseActivity : AppCompatActivity() {
         Toast.makeText(this, "Favorit gespeichert!", Toast.LENGTH_SHORT).show()
     }
 
-    private fun showCategoriesDialog() {
-        Toast.makeText(this, "Lade Kategorien...", Toast.LENGTH_SHORT).show()
-        CoroutineScope(Dispatchers.Main).launch {
-            val categories = scraper.getCategories()
-            if (categories.isEmpty()) {
-                Toast.makeText(this@BrowseActivity, "Keine Kategorien gefunden", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            val names = categories.map { it.name }.toTypedArray()
-            AlertDialog.Builder(this@BrowseActivity)
-                .setTitle("Kategorien")
-                .setItems(names) { _, which ->
-                    loadPage(categories[which].url)
-                }
-                .setNegativeButton("Abbrechen", null)
-                .show()
-        }
-    }
-
     // ==================== FIRETV NAVIGATION ====================
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -308,7 +448,6 @@ class BrowseActivity : AppCompatActivity() {
                 return true
             }
             KeyEvent.KEYCODE_MENU -> {
-                // Menu: Zurück zur Seitenauswahl
                 finish()
                 return true
             }

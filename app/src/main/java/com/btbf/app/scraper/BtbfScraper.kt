@@ -44,6 +44,97 @@ class BtbfScraper : SiteScraper {
         return parseVideoList(doc, searchUrl)
     }
 
+    override suspend fun getSorted(sort: SortOrder, page: Int): PaginatedResult {
+        val url = "${baseUrl}${sort.path}/${if (page > 1) "?page=$page" else ""}"
+        val doc = fetchDocument(url) ?: return PaginatedResult(emptyList(), false)
+        return parseVideoList(doc, url)
+    }
+
+    override suspend fun getActors(page: Int): List<ActorItem> {
+        val urls = listOf(
+            "${baseUrl}models/", "${baseUrl}actors/", "${baseUrl}pornstars/",
+            "${baseUrl}girls/", "${baseUrl}performers/"
+        )
+        for (url in urls) {
+            val pageUrl = if (page > 1) "${url}?page=$page" else url
+            val doc = fetchDocument(pageUrl) ?: continue
+            val actors = mutableListOf<ActorItem>()
+
+            // Verschiedene Selektoren für Model/Actor-Listen
+            val selectors = listOf(
+                ".model-list .model-item", ".models-list .model",
+                ".pornstar-list .pornstar", ".actor-list .actor",
+                ".list-models .item", ".model-block", ".performer-item",
+                ".thumbs .thumb", ".thumb-list .thumb"
+            )
+
+            for (selector in selectors) {
+                val elements = doc.select(selector)
+                if (elements.isNotEmpty()) {
+                    for (el in elements) {
+                        val link = el.selectFirst("a[href]") ?: continue
+                        val name = el.selectFirst(".name, .title, h3, h4")?.text()?.trim()
+                            ?: el.selectFirst("img")?.attr("alt")?.trim()
+                            ?: link.text().trim()
+                        if (name.isEmpty()) continue
+                        val href = resolveUrl(link.attr("href"))
+                        val thumb = el.selectFirst("img")?.let { getImgSrc(it) } ?: ""
+                        val count = el.selectFirst(".count, .videos-count, .num")?.text()?.trim() ?: ""
+                        actors.add(ActorItem(name, href, thumb, count))
+                    }
+                    return actors
+                }
+            }
+
+            // Fallback: Links mit Bildern auf der Seite
+            val allLinks = doc.select("a[href]")
+            for (link in allLinks) {
+                val href = link.attr("href")
+                if (href.contains("/model/") || href.contains("/actor/") ||
+                    href.contains("/pornstar/") || href.contains("/girl/")
+                ) {
+                    val img = link.selectFirst("img")
+                    val name = img?.attr("alt")?.trim() ?: link.text().trim()
+                    val thumb = img?.let { getImgSrc(it) } ?: ""
+                    if (name.isNotEmpty()) {
+                        actors.add(ActorItem(name, resolveUrl(href), thumb))
+                    }
+                }
+            }
+            if (actors.isNotEmpty()) return actors
+        }
+        return emptyList()
+    }
+
+    override suspend fun getTags(): List<TagItem> {
+        val urls = listOf("${baseUrl}tags/", "${baseUrl}tag/", "${baseUrl}categories/tags/")
+        for (url in urls) {
+            val doc = fetchDocument(url) ?: continue
+            val tags = mutableListOf<TagItem>()
+
+            val selectors = listOf(
+                ".tag-list a", ".tags a", ".tag-cloud a",
+                "a[href*=tag]", ".category-list a"
+            )
+
+            for (selector in selectors) {
+                val elements = doc.select(selector)
+                if (elements.size >= 3) {
+                    for (el in elements) {
+                        val name = el.text().trim()
+                        val href = resolveUrl(el.attr("href"))
+                        val count = el.selectFirst(".count, .num, span.badge")?.text()?.trim() ?: ""
+                        if (name.isNotEmpty() && href.isNotEmpty()) {
+                            tags.add(TagItem(name, href, count))
+                        }
+                    }
+                    return tags.distinctBy { it.name }
+                }
+            }
+        }
+        return emptyList()
+    }
+
     override suspend fun getCategories(): List<CategoryItem> {
         val doc = fetchDocument("${baseUrl}categories/") ?: return emptyList()
         val categories = mutableListOf<CategoryItem>()
@@ -196,6 +287,28 @@ class BtbfScraper : SiteScraper {
             .filter { it.isNotEmpty() }
             .distinct()
 
+        // Darsteller/Models extrahieren
+        val actors = mutableListOf<ActorItem>()
+        val actorSelectors = listOf(
+            ".model-list a", ".models a", ".pornstar-list a",
+            ".actor-list a", "a[href*=model]", "a[href*=actor]",
+            "a[href*=pornstar]", "a[href*=girl]", ".video-info a[href*=model]"
+        )
+        for (selector in actorSelectors) {
+            val elements = doc.select(selector)
+            if (elements.isNotEmpty()) {
+                for (el in elements) {
+                    val name = el.text().trim()
+                    val href = resolveUrl(el.attr("href"))
+                    val thumb = el.selectFirst("img")?.let { getImgSrc(it) } ?: ""
+                    if (name.isNotEmpty()) {
+                        actors.add(ActorItem(name, href, thumb))
+                    }
+                }
+                break
+            }
+        }
+
         // Related Videos
         val relatedVideos = parseVideoItems(doc, ".related-videos, .related, .similar")
 
@@ -214,6 +327,7 @@ class BtbfScraper : SiteScraper {
             thumbnailUrl = thumbnail,
             description = description,
             tags = tags,
+            actors = actors,
             relatedVideos = relatedVideos
         )
     }

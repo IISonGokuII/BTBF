@@ -9,5 +9,8 @@ interface SiteScraper {
     suspend fun getPage(pageUrl: String): PaginatedResult
     suspend fun getVideoDetail(pageUrl: String): VideoDetail?
     suspend fun getCategories(): List<CategoryItem>
+    suspend fun getActors(page: Int = 1): List<ActorItem>
+    suspend fun getTags(): List<TagItem>
     suspend fun search(query: String, page: Int = 1): PaginatedResult
+    suspend fun getSorted(sort: SortOrder, page: Int = 1): PaginatedResult
 }
