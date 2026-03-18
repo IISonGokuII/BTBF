@@ -101,6 +101,18 @@ class MainActivity : AppCompatActivity() {
         setupButtons()
         registerDownloadReceiver()
         requestPermissions()
+
+        // Fallback: Wenn BrowseActivity eine URL im WebView öffnen will
+        intent.getStringExtra("fallback_url")?.let { url ->
+            websiteUrl = url
+            currentSiteDomain = ""
+            binding.siteSelector.visibility = View.GONE
+            binding.loadingIndicator.visibility = View.GONE
+            isSplashVisible = false
+            binding.splashOverlay.visibility = View.GONE
+            setupWebView()
+            webView.loadUrl(url)
+        }
     }
 
     // ==================== SITE SELECTOR ====================
@@ -117,6 +129,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectSite(index: Int) {
+        val site = sites[index]
+
+        // Nativ-Modus: BrowseActivity mit Scraper öffnen
+        BrowseActivity.launch(this, site.name, site.url)
+    }
+
+    private fun selectSiteWebView(index: Int) {
         val site = sites[index]
         websiteUrl = site.url
         currentSiteDomain = site.domain

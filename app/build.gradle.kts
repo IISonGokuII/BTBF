@@ -69,6 +69,12 @@ dependencies {
     
     // Download Manager
     implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // HTML Parser für nativen Scraper
+    implementation("org.jsoup:jsoup:1.17.2")
+
+    // Image Loading
+    implementation("io.coil-kt:coil:2.5.0")
     
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
