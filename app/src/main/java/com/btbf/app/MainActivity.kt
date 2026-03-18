@@ -367,22 +367,25 @@ class MainActivity : AppCompatActivity() {
             webView.loadUrl(websiteUrl)
             hideCategoryBar()
         }
-        
-        // Neueste Videos
+
+        // Neueste Videos - BTBF verwendet /videos?sort=newest statt /new
         binding.btnCatNew.setOnClickListener {
-            webView.loadUrl("${websiteUrl}new")
+            val sortUrl = if (websiteUrl.contains("borntobefuck")) "${websiteUrl}videos?sort=newest" else "${websiteUrl}new"
+            webView.loadUrl(sortUrl)
             hideCategoryBar()
         }
-        
-        // Top bewertete Videos
+
+        // Top bewertete Videos - BTBF verwendet /videos?sort=popular statt /top
         binding.btnCatTop.setOnClickListener {
-            webView.loadUrl("${websiteUrl}top")
+            val sortUrl = if (websiteUrl.contains("borntobefuck")) "${websiteUrl}videos?sort=popular" else "${websiteUrl}top"
+            webView.loadUrl(sortUrl)
             hideCategoryBar()
         }
-        
-        // Zufälliges Video
+
+        // Zufälliges Video - BTBF verwendet /videos?sort=random statt /random
         binding.btnCatRandom.setOnClickListener {
-            webView.loadUrl("${websiteUrl}random")
+            val sortUrl = if (websiteUrl.contains("borntobefuck")) "${websiteUrl}videos?sort=random" else "${websiteUrl}random"
+            webView.loadUrl(sortUrl)
             hideCategoryBar()
         }
         
