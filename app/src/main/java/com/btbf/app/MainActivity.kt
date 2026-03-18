@@ -19,10 +19,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
-import android.view.animation.AlphaAnimation
-import android.view.animation.AnimationSet
 import android.view.animation.DecelerateInterpolator
-import android.view.animation.ScaleAnimation
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.URLUtil
@@ -32,6 +29,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -58,13 +56,13 @@ class MainActivity : AppCompatActivity() {
     private val websiteUrl = "https://de.borntobefuck.com/"
     private val storagePermissionCode = 100
     private lateinit var favoritesManager: FavoritesManager
+    private lateinit var videoDownloadHelper: VideoDownloadHelper
     private lateinit var gestureDetector: GestureDetector
     private val handler = Handler(Looper.getMainLooper())
 
-    // Video-URL Tracking
-    private val capturedVideoUrls = mutableListOf<String>()
-    private var lastCapturedVideoUrl: String? = null
-    private val videoExtensions = listOf(".mp4", ".webm", ".mkv", ".avi", ".mov", ".m4v")
+    // Video-URL Tracking (direkte + Stream URLs)
+    private val capturedDirectUrls = mutableListOf<String>()
+    private val capturedStreamUrls = mutableListOf<String>()
     private var downloadReceiver: BroadcastReceiver? = null
 
     // Auto-Hide Timer
@@ -85,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         favoritesManager = FavoritesManager(this)
+        videoDownloadHelper = VideoDownloadHelper(this)
         gestureDetector = GestureDetector(this, GestureListener())
 
         hideSystemUI()
@@ -157,14 +156,21 @@ class MainActivity : AppCompatActivity() {
 
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return null
-                if (isVideoUrl(url)) {
-                    synchronized(capturedVideoUrls) {
-                        if (!capturedVideoUrls.contains(url)) {
-                            capturedVideoUrls.add(url)
-                            lastCapturedVideoUrl = url
-                        }
+
+                // Direkte Video-URLs abfangen
+                if (videoDownloadHelper.isDirectVideoUrl(url)) {
+                    synchronized(capturedDirectUrls) {
+                        if (!capturedDirectUrls.contains(url)) capturedDirectUrls.add(url)
                     }
                 }
+
+                // HLS/DASH Stream-URLs abfangen
+                if (videoDownloadHelper.isStreamUrl(url)) {
+                    synchronized(capturedStreamUrls) {
+                        if (!capturedStreamUrls.contains(url)) capturedStreamUrls.add(url)
+                    }
+                }
+
                 if (isAdUrl(url)) return WebResourceResponse("text/plain", "UTF-8", null)
                 return super.shouldInterceptRequest(view, request)
             }
@@ -172,7 +178,8 @@ class MainActivity : AppCompatActivity() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 binding.progressBar.visibility = View.VISIBLE
-                synchronized(capturedVideoUrls) { capturedVideoUrls.clear(); lastCapturedVideoUrl = null }
+                synchronized(capturedDirectUrls) { capturedDirectUrls.clear() }
+                synchronized(capturedStreamUrls) { capturedStreamUrls.clear() }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -180,7 +187,6 @@ class MainActivity : AppCompatActivity() {
                 binding.progressBar.visibility = View.GONE
                 injectComfortScripts()
 
-                // Splash-Screen ausblenden nach erstem Laden
                 if (isSplashVisible) {
                     handler.postDelayed({ dismissSplash() }, 800)
                 }
@@ -216,7 +222,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
-            startDownload(url, contentDisposition, mimetype, userAgent)
+            videoDownloadHelper.downloadDirect(url, webView.url ?: websiteUrl, userAgent, contentDisposition, mimetype)
+            Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
         }
 
         webView.addJavascriptInterface(WebAppInterface(this), "AndroidInterface")
@@ -233,12 +240,9 @@ class MainActivity : AppCompatActivity() {
             .alpha(0f)
             .setDuration(500)
             .setInterpolator(AccelerateDecelerateInterpolator())
-            .withEndAction {
-                binding.splashOverlay.visibility = View.GONE
-            }
+            .withEndAction { binding.splashOverlay.visibility = View.GONE }
             .start()
 
-        // FireTV Hilfe kurz einblenden
         showHelpOverlay()
     }
 
@@ -272,7 +276,6 @@ class MainActivity : AppCompatActivity() {
                 .setInterpolator(DecelerateInterpolator())
                 .start()
         }
-        // Auto-Hide Timer neu starten
         handler.removeCallbacks(hideNavRunnable)
         handler.postDelayed(hideNavRunnable, NAV_AUTO_HIDE_MS)
     }
@@ -341,14 +344,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnCatRandom.setOnClickListener { webView.loadUrl("${websiteUrl}random"); hideCategoryBar() }
     }
 
-    // ==================== VIDEO URL DETECTION ====================
-
-    private fun isVideoUrl(url: String): Boolean {
-        val lower = url.lowercase()
-        return videoExtensions.any { lower.contains(it) } ||
-               lower.contains("mime=video") || lower.contains("type=video") ||
-               (lower.contains("/video/") && (lower.contains(".mp4") || lower.contains("format=")))
-    }
+    // ==================== AD BLOCKING ====================
 
     private fun isAdUrl(url: String): Boolean {
         val lower = url.lowercase()
@@ -416,27 +412,71 @@ class MainActivity : AppCompatActivity() {
                     }
                 }, true);
 
-                // Video-URL Tracking
+                // Video + HLS URL Tracking
+                window._btbfVideoUrls = window._btbfVideoUrls || [];
+                window._btbfStreamUrls = window._btbfStreamUrls || [];
+
+                function trackUrl(url, isStream) {
+                    if (!url || url.indexOf('blob:') === 0) return;
+                    if (isStream) {
+                        if (window._btbfStreamUrls.indexOf(url) === -1) window._btbfStreamUrls.push(url);
+                        try { AndroidInterface.reportStreamUrl(url); } catch(e) {}
+                    } else {
+                        if (window._btbfVideoUrls.indexOf(url) === -1) window._btbfVideoUrls.push(url);
+                        try { AndroidInterface.reportVideoUrl(url); } catch(e) {}
+                    }
+                }
+
+                function isStreamUrl(url) {
+                    return url && (url.indexOf('.m3u8') !== -1 || url.indexOf('.mpd') !== -1);
+                }
+
                 document.querySelectorAll('video').forEach(function(v) {
                     v.setAttribute('playsinline', '');
                     function track() {
                         var s = v.currentSrc || v.src;
-                        if (s && s.indexOf('blob:') !== 0) window._btbfVideoUrl = s;
+                        if (s) trackUrl(s, isStreamUrl(s));
                         v.querySelectorAll('source').forEach(function(src) {
-                            if (src.src && src.src.indexOf('blob:') !== 0) window._btbfVideoUrl = src.src;
+                            if (src.src) trackUrl(src.src, isStreamUrl(src.src));
                         });
                     }
                     track();
                     v.addEventListener('loadeddata', track);
                     v.addEventListener('playing', track);
+                    v.addEventListener('loadedmetadata', track);
                 });
+
+                // XHR/Fetch Interceptor fuer HLS
+                var origXHR = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, url) {
+                    if (url && typeof url === 'string') {
+                        if (isStreamUrl(url)) trackUrl(url, true);
+                        else if (url.match(/\.(mp4|webm|mkv|mov)/i)) trackUrl(url, false);
+                    }
+                    return origXHR.apply(this, arguments);
+                };
+
+                var origFetch = window.fetch;
+                if (origFetch) {
+                    window.fetch = function(input) {
+                        var url = typeof input === 'string' ? input : (input && input.url);
+                        if (url) {
+                            if (isStreamUrl(url)) trackUrl(url, true);
+                            else if (url.match(/\.(mp4|webm|mkv|mov)/i)) trackUrl(url, false);
+                        }
+                        return origFetch.apply(this, arguments);
+                    };
+                }
 
                 new MutationObserver(function(m) {
                     m.forEach(function(mut) {
                         mut.addedNodes.forEach(function(n) {
                             if (n.nodeType === 1) {
                                 var vid = n.tagName === 'VIDEO' ? n : (n.querySelector ? n.querySelector('video') : null);
-                                if (vid) { var s = vid.currentSrc || vid.src; if (s && s.indexOf('blob:') !== 0) window._btbfVideoUrl = s; }
+                                if (vid) {
+                                    var s = vid.currentSrc || vid.src;
+                                    if (s) trackUrl(s, isStreamUrl(s));
+                                }
                             }
                         });
                     });
@@ -462,72 +502,190 @@ class MainActivity : AppCompatActivity() {
     // ==================== DOWNLOAD ====================
 
     private fun findAndDownloadVideo() {
-        Toast.makeText(this, "Suche Video...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Suche Videos...", Toast.LENGTH_SHORT).show()
+
+        // Alle URLs aus JavaScript + Native Interception sammeln
         webView.evaluateJavascript("""
             (function() {
-                if (window._btbfVideoUrl) return window._btbfVideoUrl;
-                var vids = document.querySelectorAll('video');
-                for (var i = 0; i < vids.length; i++) {
-                    var s = vids[i].currentSrc || vids[i].src;
-                    if (s && s.indexOf('blob:') !== 0) return s;
-                    var srcs = vids[i].querySelectorAll('source');
-                    for (var j = 0; j < srcs.length; j++) { if (srcs[j].src && srcs[j].src.indexOf('blob:') !== 0) return srcs[j].src; }
-                }
-                var links = document.querySelectorAll('a[href*=".mp4"], a[href*="download"]');
-                for (var k = 0; k < links.length; k++) return links[k].href;
+                var result = { direct: [], streams: [] };
+
+                // Aus Tracking
+                if (window._btbfVideoUrls) result.direct = window._btbfVideoUrls.slice();
+                if (window._btbfStreamUrls) result.streams = window._btbfStreamUrls.slice();
+
+                // Video-Elemente durchsuchen
+                document.querySelectorAll('video').forEach(function(v) {
+                    var s = v.currentSrc || v.src;
+                    if (s && s.indexOf('blob:') !== 0) {
+                        if (s.indexOf('.m3u8') !== -1 || s.indexOf('.mpd') !== -1) {
+                            if (result.streams.indexOf(s) === -1) result.streams.push(s);
+                        } else {
+                            if (result.direct.indexOf(s) === -1) result.direct.push(s);
+                        }
+                    }
+                    v.querySelectorAll('source').forEach(function(src) {
+                        if (src.src && src.src.indexOf('blob:') !== 0) {
+                            if (src.src.indexOf('.m3u8') !== -1) {
+                                if (result.streams.indexOf(src.src) === -1) result.streams.push(src.src);
+                            } else {
+                                if (result.direct.indexOf(src.src) === -1) result.direct.push(src.src);
+                            }
+                        }
+                    });
+                });
+
+                // Download-Links suchen
+                document.querySelectorAll('a[href*=".mp4"], a[href*="download"], a[href*=".webm"]').forEach(function(a) {
+                    if (a.href && result.direct.indexOf(a.href) === -1) result.direct.push(a.href);
+                });
+
+                // og:video Meta-Tag
                 var og = document.querySelector('meta[property="og:video"]');
-                if (og) return og.content;
-                return null;
+                if (og && og.content && result.direct.indexOf(og.content) === -1) result.direct.push(og.content);
+
+                // Script-Tags durchsuchen
+                var p = /https?:\/\/[^\s'"<>]+\.(mp4|m3u8|webm)[^\s'"<>]*/gi;
+                document.querySelectorAll('script').forEach(function(s) {
+                    var matches = (s.textContent || '').match(p);
+                    if (matches) matches.forEach(function(m) {
+                        if (m.indexOf('.m3u8') !== -1) {
+                            if (result.streams.indexOf(m) === -1) result.streams.push(m);
+                        } else {
+                            if (result.direct.indexOf(m) === -1) result.direct.push(m);
+                        }
+                    });
+                });
+
+                // data-Attribute
+                document.querySelectorAll('[data-src], [data-video], [data-hls]').forEach(function(el) {
+                    ['data-src', 'data-video', 'data-hls', 'data-stream'].forEach(function(attr) {
+                        var val = el.getAttribute(attr);
+                        if (val && val.match(/\.(mp4|m3u8|webm)/i)) {
+                            if (val.indexOf('.m3u8') !== -1) {
+                                if (result.streams.indexOf(val) === -1) result.streams.push(val);
+                            } else {
+                                if (result.direct.indexOf(val) === -1) result.direct.push(val);
+                            }
+                        }
+                    });
+                });
+
+                return JSON.stringify(result);
             })();
         """.trimIndent()) { jsResult ->
-            val jsUrl = jsResult?.replace("\"", "")?.takeIf { it != "null" && it.isNotEmpty() && !it.startsWith("blob:") }
-            if (jsUrl != null) { startDownload(jsUrl, null, "video/mp4", null); return@evaluateJavascript }
+            handleVideoSearchResult(jsResult)
+        }
+    }
 
-            val captured = synchronized(capturedVideoUrls) { lastCapturedVideoUrl ?: capturedVideoUrls.lastOrNull() }
-            if (captured != null) { startDownload(captured, null, "video/mp4", null); return@evaluateJavascript }
+    private fun handleVideoSearchResult(jsResult: String?) {
+        val allDirect = mutableListOf<String>()
+        val allStreams = mutableListOf<String>()
 
-            webView.evaluateJavascript("""
-                (function() {
-                    var scripts = document.querySelectorAll('script');
-                    var p = /https?:\/\/[^\s'"<>]+\.mp4[^\s'"<>]*/gi;
-                    for (var i = 0; i < scripts.length; i++) {
-                        var m = (scripts[i].textContent || '').match(p);
-                        if (m) return m[0];
-                    }
-                    var els = document.querySelectorAll('[data-src*=".mp4"], [data-video*=".mp4"]');
-                    for (var j = 0; j < els.length; j++) return els[j].getAttribute('data-src') || els[j].getAttribute('data-video');
-                    return null;
-                })();
-            """.trimIndent()) { deep ->
-                val url = deep?.replace("\"", "")?.takeIf { it != "null" && it.isNotEmpty() }
-                if (url != null) startDownload(url, null, "video/mp4", null)
-                else runOnUiThread { Toast.makeText(this, "Kein Video gefunden. Oeffne zuerst ein Video.", Toast.LENGTH_LONG).show() }
+        // JavaScript-Ergebnisse parsen
+        try {
+            val clean = jsResult?.trim()?.removeSurrounding("\"")
+                ?.replace("\\\"", "\"")?.replace("\\\\/", "/")
+                ?.replace("\\\\", "\\")
+            if (clean != null && clean != "null") {
+                val json = org.json.JSONObject(clean)
+                val directArr = json.optJSONArray("direct")
+                val streamArr = json.optJSONArray("streams")
+                if (directArr != null) for (i in 0 until directArr.length()) allDirect.add(directArr.getString(i))
+                if (streamArr != null) for (i in 0 until streamArr.length()) allStreams.add(streamArr.getString(i))
+            }
+        } catch (_: Exception) { }
+
+        // Native abgefangene URLs hinzufuegen
+        synchronized(capturedDirectUrls) {
+            capturedDirectUrls.forEach { if (!allDirect.contains(it)) allDirect.add(it) }
+        }
+        synchronized(capturedStreamUrls) {
+            capturedStreamUrls.forEach { if (!allStreams.contains(it)) allStreams.add(it) }
+        }
+
+        // Ad-URLs rausfiltern
+        allDirect.removeAll { isAdUrl(it) }
+        allStreams.removeAll { isAdUrl(it) }
+
+        val totalFound = allDirect.size + allStreams.size
+
+        when {
+            totalFound == 0 -> {
+                Toast.makeText(this, "Kein Video gefunden. Oeffne zuerst ein Video.", Toast.LENGTH_LONG).show()
+            }
+            totalFound == 1 -> {
+                // Nur eine URL - direkt downloaden
+                if (allDirect.isNotEmpty()) {
+                    videoDownloadHelper.downloadDirect(allDirect.first(), webView.url, webView.settings.userAgentString)
+                    Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
+                } else {
+                    startHlsDownload(allStreams.first())
+                }
+            }
+            else -> {
+                // Mehrere URLs - Dialog zeigen
+                showDownloadDialog(allDirect, allStreams)
             }
         }
     }
 
-    private fun startDownload(url: String, contentDisposition: String?, mimetype: String?, userAgent: String?) {
-        try {
-            val fileName = if (contentDisposition != null) URLUtil.guessFileName(url, contentDisposition, mimetype)
-                           else "BTBF_Video_${System.currentTimeMillis()}.mp4"
-            val cookie = CookieManager.getInstance().getCookie(url)
+    private fun showDownloadDialog(directUrls: List<String>, streamUrls: List<String>) {
+        val items = mutableListOf<Pair<String, String>>() // label -> url
 
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                setTitle("BTBF Download")
-                setDescription(fileName)
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setAllowedOverMetered(true)
-                setAllowedOverRoaming(true)
-                setMimeType(mimetype ?: "video/mp4")
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-                if (!cookie.isNullOrEmpty()) addRequestHeader("Cookie", cookie)
-                addRequestHeader("Referer", webView.url ?: websiteUrl)
-                addRequestHeader("User-Agent", userAgent ?: webView.settings.userAgentString)
+        directUrls.forEachIndexed { i, url ->
+            val ext = when {
+                url.lowercase().contains(".mp4") -> "MP4"
+                url.lowercase().contains(".webm") -> "WEBM"
+                else -> "Video"
             }
-            getSystemService<DownloadManager>()?.enqueue(request)
-            Toast.makeText(this, "Download: $fileName", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Fehler: ${e.message}", Toast.LENGTH_LONG).show()
+            val shortUrl = if (url.length > 60) "...${url.takeLast(50)}" else url
+            items.add("[$ext] Video ${i + 1} - $shortUrl" to url)
+        }
+
+        streamUrls.forEachIndexed { i, url ->
+            val shortUrl = if (url.length > 60) "...${url.takeLast(50)}" else url
+            items.add("[HLS Stream] ${i + 1} - $shortUrl" to url)
+        }
+
+        val labels = items.map { it.first }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("${items.size} Videos gefunden")
+            .setItems(labels) { _, which ->
+                val (label, url) = items[which]
+                if (label.startsWith("[HLS")) {
+                    startHlsDownload(url)
+                } else {
+                    videoDownloadHelper.downloadDirect(url, webView.url, webView.settings.userAgentString)
+                    Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun startHlsDownload(url: String) {
+        Toast.makeText(this, "HLS-Stream Download gestartet...", Toast.LENGTH_SHORT).show()
+
+        CoroutineScope(Dispatchers.Main).launch {
+            videoDownloadHelper.downloadHlsStream(
+                m3u8Url = url,
+                referer = webView.url,
+                userAgent = webView.settings.userAgentString,
+                onProgress = { progress, message ->
+                    // Progress-Toast alle 20%
+                    if (progress % 20 == 0 || progress >= 95) {
+                        Toast.makeText(this@MainActivity, "$message ($progress%)", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onComplete = { file ->
+                    if (file != null) {
+                        Toast.makeText(this@MainActivity, "Download fertig: ${file.name}", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this@MainActivity, "Download fehlgeschlagen", Toast.LENGTH_LONG).show()
+                    }
+                }
+            )
         }
     }
 
@@ -672,11 +830,30 @@ class MainActivity : AppCompatActivity() {
 
     inner class WebAppInterface(private val context: Context) {
         @JavascriptInterface
-        fun downloadVideo(url: String) { CoroutineScope(Dispatchers.Main).launch { startDownload(url, null, "video/mp4", null) } }
+        fun downloadVideo(url: String) {
+            CoroutineScope(Dispatchers.Main).launch {
+                videoDownloadHelper.downloadDirect(url, webView.url, webView.settings.userAgentString)
+            }
+        }
+
         @JavascriptInterface
-        fun showToast(message: String) { CoroutineScope(Dispatchers.Main).launch { Toast.makeText(context, message, Toast.LENGTH_SHORT).show() } }
+        fun showToast(message: String) {
+            CoroutineScope(Dispatchers.Main).launch { Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
+        }
+
         @JavascriptInterface
-        fun reportVideoUrl(url: String) { synchronized(capturedVideoUrls) { if (!capturedVideoUrls.contains(url)) { capturedVideoUrls.add(url); lastCapturedVideoUrl = url } } }
+        fun reportVideoUrl(url: String) {
+            synchronized(capturedDirectUrls) {
+                if (!capturedDirectUrls.contains(url)) capturedDirectUrls.add(url)
+            }
+        }
+
+        @JavascriptInterface
+        fun reportStreamUrl(url: String) {
+            synchronized(capturedStreamUrls) {
+                if (!capturedStreamUrls.contains(url)) capturedStreamUrls.add(url)
+            }
+        }
     }
 
     // ==================== GESTURES ====================
