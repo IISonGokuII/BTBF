@@ -1,21 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@android:color/black"
+    android:background="@color/splash_bg"
     tools:context=".MainActivity">
 
-    <!-- WebView Container -->
+    <!-- WebView - Volle Bildschirmgroesse -->
     <FrameLayout
         android:id="@+id/webViewContainer"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        app:layout_constraintBottom_toTopOf="@id/buttonContainer"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/categoryScroll">
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
 
         <WebView
             android:id="@+id/webView"
@@ -23,174 +19,419 @@
             android:layout_height="match_parent" />
     </FrameLayout>
 
-    <!-- Fullscreen Container für Video -->
+    <!-- Fullscreen Container fuer Video -->
     <FrameLayout
         android:id="@+id/fullscreenContainer"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
         android:background="@android:color/black"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:visibility="gone" />
 
-    <!-- Progress Bar -->
+    <!-- Splash / Loading Screen Overlay -->
+    <FrameLayout
+        android:id="@+id/splashOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/splash_bg"
+        android:visibility="visible">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <!-- Logo -->
+            <FrameLayout
+                android:layout_width="100dp"
+                android:layout_height="100dp"
+                android:layout_marginBottom="24dp">
+
+                <View
+                    android:layout_width="100dp"
+                    android:layout_height="100dp"
+                    android:background="@drawable/splash_logo_bg" />
+
+                <ImageView
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_launcher_foreground"
+                    app:tint="@color/white" />
+            </FrameLayout>
+
+            <!-- App Name -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="BTBF"
+                android:textColor="@color/colorPrimary"
+                android:textSize="36sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.15"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Wird geladen..."
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+
+            <!-- Loading Spinner -->
+            <ProgressBar
+                android:id="@+id/splashProgress"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginTop="24dp"
+                android:indeterminateTint="@color/colorPrimary" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Progress Bar (oben, duenne Linie) -->
     <ProgressBar
         android:id="@+id/progressBar"
         style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="3dp"
+        android:layout_gravity="top"
         android:background="@android:color/transparent"
         android:max="100"
         android:progress="0"
-        android:progressTint="@color/colorPrimary"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:progressDrawable="@drawable/progress_bar_custom"
+        android:visibility="gone" />
 
-    <!-- Quick Access Kategorien Overlay (oben) -->
-    <HorizontalScrollView
-        android:id="@+id/categoryScroll"
-        android:layout_width="0dp"
+    <!-- Top Bar: Kategorie-Navigation mit Gradient-Hintergrund -->
+    <LinearLayout
+        android:id="@+id/topBarContainer"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@android:color/black"
-        android:fillViewport="true"
-        android:scrollbars="none"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
+        android:layout_gravity="top"
+        android:orientation="vertical"
+        android:visibility="gone">
 
-        <LinearLayout
-            android:id="@+id/categoryContainer"
-            android:layout_width="wrap_content"
+        <!-- Gradient Hintergrund -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:background="@android:color/transparent" />
+
+        <HorizontalScrollView
+            android:id="@+id/categoryScroll"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:padding="8dp">
+            android:background="@drawable/top_bar_gradient"
+            android:fillViewport="true"
+            android:scrollbars="none"
+            android:paddingTop="8dp"
+            android:paddingBottom="16dp">
 
-            <!-- Kategorie Buttons -->
-            <Button
-                android:id="@+id/btnCatHome"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            <LinearLayout
+                android:id="@+id/categoryContainer"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginEnd="4dp"
-                android:text="🏠 Home"
-                android:textColor="@android:color/white"
-                android:textSize="12sp" />
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:gravity="center_vertical">
 
-            <Button
-                android:id="@+id/btnCatNew"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginEnd="4dp"
-                android:text="🔥 Neu"
-                android:textColor="@android:color/white"
-                android:textSize="12sp" />
+                <Button
+                    android:id="@+id/btnCatHome"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/category_chip_bg"
+                    android:text="Home"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp" />
 
-            <Button
-                android:id="@+id/btnCatTop"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginEnd="4dp"
-                android:text="⭐ Top"
-                android:textColor="@android:color/white"
-                android:textSize="12sp" />
+                <Button
+                    android:id="@+id/btnCatNew"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/category_chip_bg"
+                    android:text="Neu"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp" />
 
-            <Button
-                android:id="@+id/btnCatRandom"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginEnd="4dp"
-                android:text="🎲 Zufall"
-                android:textColor="@android:color/white"
-                android:textSize="12sp" />
+                <Button
+                    android:id="@+id/btnCatTop"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/category_chip_bg"
+                    android:text="Top"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp" />
 
-        </LinearLayout>
-    </HorizontalScrollView>
+                <Button
+                    android:id="@+id/btnCatRandom"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/category_chip_bg"
+                    android:text="Zufall"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp" />
 
-    <!-- Button Container für Navigation -->
+            </LinearLayout>
+        </HorizontalScrollView>
+    </LinearLayout>
+
+    <!-- Bottom Navigation Bar mit Gradient -->
     <LinearLayout
         android:id="@+id/buttonContainer"
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@android:color/black"
+        android:layout_gravity="bottom"
+        android:background="@drawable/nav_bar_gradient"
         android:gravity="center"
         android:orientation="horizontal"
-        android:padding="8dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
+        android:paddingTop="20dp"
+        android:paddingBottom="12dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:visibility="gone">
 
-        <!-- Home Button -->
-        <ImageButton
-            android:id="@+id/btnHome"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Home"
-            android:src="@android:drawable/ic_menu_compass"
-            app:tint="@android:color/white" />
+        <!-- Home -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
 
-        <!-- Back Button -->
-        <ImageButton
-            android:id="@+id/btnBack"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Zurück"
-            android:src="@android:drawable/ic_menu_revert"
-            app:tint="@android:color/white" />
+            <ImageButton
+                android:id="@+id/btnHome"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/nav_btn_bg"
+                android:contentDescription="Home"
+                android:padding="14dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_home"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
 
-        <!-- Refresh Button -->
-        <ImageButton
-            android:id="@+id/btnRefresh"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Aktualisieren"
-            android:src="@android:drawable/ic_menu_rotate"
-            app:tint="@android:color/white" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Home"
+                android:textColor="@color/text_secondary"
+                android:textSize="10sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
 
-        <!-- Download Button -->
-        <ImageButton
-            android:id="@+id/btnDownload"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Download"
-            android:src="@android:drawable/stat_sys_download"
-            app:tint="@android:color/white" />
+        <!-- Back -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
 
-        <!-- Fullscreen Button -->
-        <ImageButton
-            android:id="@+id/btnFullscreen"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Vollbild"
-            android:src="@android:drawable/ic_menu_view"
-            app:tint="@android:color/white" />
+            <ImageButton
+                android:id="@+id/btnBack"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/nav_btn_bg"
+                android:contentDescription="Zurueck"
+                android:padding="14dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_back"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
 
-        <!-- Favorites Button -->
-        <ImageButton
-            android:id="@+id/btnFavorites"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Favoriten"
-            android:src="@android:drawable/btn_star_big_on"
-            app:tint="@android:color/white" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Zurueck"
+                android:textColor="@color/text_secondary"
+                android:textSize="10sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <!-- Refresh -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageButton
+                android:id="@+id/btnRefresh"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/nav_btn_bg"
+                android:contentDescription="Aktualisieren"
+                android:padding="14dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_refresh"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Neu laden"
+                android:textColor="@color/text_secondary"
+                android:textSize="10sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <!-- Download -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageButton
+                android:id="@+id/btnDownload"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/nav_btn_bg"
+                android:contentDescription="Download"
+                android:padding="14dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_download"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Download"
+                android:textColor="@color/text_secondary"
+                android:textSize="10sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <!-- Fullscreen -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageButton
+                android:id="@+id/btnFullscreen"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/nav_btn_bg"
+                android:contentDescription="Vollbild"
+                android:padding="14dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_fullscreen"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Vollbild"
+                android:textColor="@color/text_secondary"
+                android:textSize="10sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <!-- Favorites -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageButton
+                android:id="@+id/btnFavorites"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/nav_btn_bg"
+                android:contentDescription="Favoriten"
+                android:padding="14dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_favorite"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Favoriten"
+                android:textColor="@color/text_secondary"
+                android:textSize="10sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
 
     </LinearLayout>
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+    <!-- FireTV Hilfe-Overlay (kurze Anzeige beim Start) -->
+    <LinearLayout
+        android:id="@+id/helpOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="80dp"
+        android:background="@drawable/category_chip_bg"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="D-Pad: Navigieren"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="OK: Auswaehlen"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Menu: Optionen"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+</FrameLayout>
