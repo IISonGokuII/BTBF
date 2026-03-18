@@ -35,9 +35,15 @@
         android:background="@color/splash_bg"
         android:visibility="visible">
 
-        <!-- Site-Auswahl (sichtbar beim Start) -->
-        <LinearLayout
+        <!-- Site-Auswahl (sichtbar beim Start, scrollbar) -->
+        <ScrollView
             android:id="@+id/siteSelector"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="visible">
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
@@ -45,7 +51,8 @@
             android:orientation="vertical"
             android:paddingStart="32dp"
             android:paddingEnd="32dp"
-            android:visibility="visible">
+            android:paddingTop="24dp"
+            android:paddingBottom="24dp">
 
             <!-- Logo -->
             <FrameLayout
@@ -165,7 +172,68 @@
                     android:layout_marginTop="2dp" />
             </LinearLayout>
 
+            <!-- SheeshFans -->
+            <LinearLayout
+                android:id="@+id/btnSiteSheeshfans"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/site_card_bg"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:layout_marginBottom="12dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clickable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="SheeshFans"
+                    android:textColor="@color/white"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Free Porn &amp; Onlyfans Nude Videos"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- LeakPorner -->
+            <LinearLayout
+                android:id="@+id/btnSiteLeakporner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/site_card_bg"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:layout_marginBottom="12dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clickable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="LeakPorner"
+                    android:textColor="@color/white"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Watch Onlyfans Leaks Videos"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
         </LinearLayout>
+        </ScrollView>
 
         <!-- Lade-Anzeige (nach Auswahl sichtbar) -->
         <LinearLayout
@@ -337,7 +405,7 @@
         android:paddingEnd="8dp"
         android:visibility="gone">
 
-        <!-- Home -->
+        <!-- Hauptseite (zurueck zur Seitenauswahl) -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -350,7 +418,7 @@
                 android:layout_width="52dp"
                 android:layout_height="52dp"
                 android:background="@drawable/nav_btn_bg"
-                android:contentDescription="Home"
+                android:contentDescription="Hauptseite"
                 android:padding="14dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_home"
@@ -360,7 +428,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Home"
+                android:text="Seiten"
                 android:textColor="@color/text_secondary"
                 android:textSize="10sp"
                 android:layout_marginTop="2dp" />

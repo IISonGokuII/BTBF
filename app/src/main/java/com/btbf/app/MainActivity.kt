@@ -58,7 +58,9 @@ class MainActivity : AppCompatActivity() {
     private val sites = listOf(
         SiteConfig("BTBF", "https://de.borntobefuck.com/", "borntobefuck"),
         SiteConfig("CamCaps", "https://camcaps.tv/", "camcaps.tv"),
-        SiteConfig("FyxXR", "https://fyxxr.com/", "fyxxr.com")
+        SiteConfig("FyxXR", "https://fyxxr.com/", "fyxxr.com"),
+        SiteConfig("SheeshFans", "https://sheeshfans.com/", "sheeshfans.com"),
+        SiteConfig("LeakPorner", "https://leakporner.com/", "leakporner.com")
     )
     private var websiteUrl = ""
     private var currentSiteDomain = ""
@@ -107,6 +109,8 @@ class MainActivity : AppCompatActivity() {
         binding.btnSiteBtbf.setOnClickListener { selectSite(0) }
         binding.btnSiteCamcaps.setOnClickListener { selectSite(1) }
         binding.btnSiteFyxxr.setOnClickListener { selectSite(2) }
+        binding.btnSiteSheeshfans.setOnClickListener { selectSite(3) }
+        binding.btnSiteLeakporner.setOnClickListener { selectSite(4) }
 
         // Ersten Eintrag fokussieren (FireTV)
         binding.btnSiteBtbf.requestFocus()
@@ -225,6 +229,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 binding.progressBar.visibility = View.GONE
                 injectComfortScripts()
+                autoPlayVideo()
 
                 if (isSplashVisible) {
                     handler.postDelayed({ dismissSplash() }, 800)
@@ -370,7 +375,7 @@ class MainActivity : AppCompatActivity() {
     // ==================== BUTTONS ====================
 
     private fun setupButtons() {
-        binding.btnHome.setOnClickListener { webView.loadUrl(websiteUrl); hideNavBar() }
+        binding.btnHome.setOnClickListener { hideNavBar(); showSiteSelectorAgain() }
         binding.btnRefresh.setOnClickListener { webView.reload(); hideNavBar() }
         binding.btnDownload.setOnClickListener { findAndDownloadVideo() }
         binding.btnFullscreen.setOnClickListener { toggleFullscreen() }
@@ -830,6 +835,7 @@ class MainActivity : AppCompatActivity() {
                 if (isNavVisible) { hideNavBar(); return true }
                 if (isCategoryVisible) { hideCategoryBar(); return true }
                 if (webView.canGoBack()) { webView.goBack(); return true }
+                showSiteSelectorAgain(); return true
             }
             KeyEvent.KEYCODE_MENU -> {
                 if (event?.repeatCount == 0) {
@@ -874,6 +880,10 @@ class MainActivity : AppCompatActivity() {
             webView.loadUrl("about:blank")
         }
         isSplashVisible = true
+        isNavVisible = false
+        isCategoryVisible = false
+        binding.buttonContainer.visibility = View.GONE
+        binding.topBarContainer.visibility = View.GONE
         binding.splashOverlay.alpha = 1f
         binding.splashOverlay.visibility = View.VISIBLE
         binding.siteSelector.visibility = View.VISIBLE
@@ -943,6 +953,33 @@ class MainActivity : AppCompatActivity() {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         gestureDetector.onTouchEvent(event)
         return super.onTouchEvent(event)
+    }
+
+    // ==================== AUTOPLAY ====================
+
+    private fun autoPlayVideo() {
+        // Versuche Video zu finden, automatisch abzuspielen und Vollbild zu aktivieren
+        webView.evaluateJavascript("""
+            (function() {
+                var v = document.querySelector('video');
+                if (!v) return false;
+                v.muted = false;
+                v.play().then(function() {
+                    // Vollbild anfordern
+                    if (v.requestFullscreen) v.requestFullscreen();
+                    else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+                    else if (v.webkitRequestFullScreen) v.webkitRequestFullScreen();
+                }).catch(function() {
+                    // Autoplay blockiert - versuche muted
+                    v.muted = true;
+                    v.play().then(function() {
+                        if (v.requestFullscreen) v.requestFullscreen();
+                        else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+                    }).catch(function() {});
+                });
+                return true;
+            })();
+        """.trimIndent(), null)
     }
 
     // ==================== WEBVIEW HELPERS ====================
