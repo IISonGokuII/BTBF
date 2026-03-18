@@ -135,8 +135,14 @@ class MainActivity : AppCompatActivity() {
             cacheMode = WebSettings.LOAD_DEFAULT
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             databaseEnabled = true
-            layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+            layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
             userAgentString = userAgentString.replace("; wv", "")
+        }
+
+        // Hardware-Beschleunigung fuer bessere Scroll-Performance
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         }
 
         CookieManager.getInstance().apply {
@@ -369,42 +375,52 @@ class MainActivity : AppCompatActivity() {
                 if (window._btbfInjected) return;
                 window._btbfInjected = true;
 
+                // Sichere Ad-Selektoren (NICHT .overlay, #overlay - die brechen den Video-Player!)
                 var adSel = [
-                    'iframe[src*="ad"]', 'iframe[src*="pop"]', 'iframe[src*="click"]',
-                    'div[class*="ad-"]', 'div[class*="ad_"]', 'div[id*="ad-"]', 'div[id*="ad_"]',
-                    '.advertisement', '.ads', '.popup', '.modal-ad', '.ad-overlay', '.overlay-ad',
+                    'iframe[src*="exoclick"]', 'iframe[src*="juicyads"]', 'iframe[src*="trafficjunky"]',
+                    'iframe[src*="popads"]', 'iframe[src*="adsterra"]',
+                    '.advertisement', '.modal-ad', '.ad-overlay',
                     'div[class*="video-ad"]', '.pre-roll-ad', '.mid-roll-ad',
                     'a[href*="exoclick"]', 'a[href*="juicyads"]', 'a[href*="trafficjunky"]',
-                    'div[class*="exo"]', 'div[id*="exo"]',
-                    '.ad-container', '.ad-wrapper', '#overlay', '.overlay', '.modal-overlay',
-                    'div[class*="popup"]', 'div[class*="float"]', 'div[class*="sticky-ad"]',
+                    'div[class*="exo_"]', 'div[id*="exo_"]',
+                    '.ad-container', '.ad-wrapper',
+                    'div[class*="sticky-ad"]',
                     '[class*="sponsor"]', '[id*="sponsor"]'
                 ];
 
+                function isVideoRelated(el) {
+                    if (!el) return false;
+                    if (el.querySelector && (el.querySelector('video') || el.querySelector('.player') ||
+                        el.querySelector('[class*="player"]') || el.querySelector('[class*="video"]'))) return true;
+                    if (el.className && typeof el.className === 'string' &&
+                        (el.className.indexOf('player') !== -1 || el.className.indexOf('video') !== -1)) return true;
+                    if (el.id && (el.id.indexOf('player') !== -1 || el.id.indexOf('video') !== -1)) return true;
+                    return false;
+                }
+
                 function clean() {
                     adSel.forEach(function(s) {
-                        try { document.querySelectorAll(s).forEach(function(e) { e.remove(); }); } catch(x) {}
-                    });
-                    document.querySelectorAll('div, a').forEach(function(el) {
-                        var st = window.getComputedStyle(el);
-                        if (st.position === 'fixed' && parseInt(st.zIndex) > 999 &&
-                            (st.opacity === '0' || el.offsetWidth >= window.innerWidth * 0.8)) {
-                            if (!el.querySelector('video') && !el.classList.contains('player')) el.remove();
-                        }
+                        try {
+                            document.querySelectorAll(s).forEach(function(e) {
+                                if (!isVideoRelated(e)) e.remove();
+                            });
+                        } catch(x) {}
                     });
                 }
-                clean(); setInterval(clean, 2000);
+                clean();
+                // Nur einmal nach 3s nochmal aufraeumen, KEIN setInterval (Performance!)
+                setTimeout(clean, 3000);
 
                 window.open = function() { return null; };
 
+                // Click-Handler: NUR echte Ad-Links blocken, NICHT href="#" (Play-Buttons!)
                 document.addEventListener('click', function(e) {
                     var t = e.target;
                     while (t && t !== document.body) {
                         if (t.tagName === 'A') {
                             var h = t.getAttribute('href') || '';
                             if (h.indexOf('exoclick') !== -1 || h.indexOf('juicyads') !== -1 ||
-                                h.indexOf('trafficjunky') !== -1 || h.indexOf('popads') !== -1 ||
-                                h === '#' || h.indexOf('javascript:void') === 0) {
+                                h.indexOf('trafficjunky') !== -1 || h.indexOf('popads') !== -1) {
                                 e.preventDefault(); e.stopPropagation(); return false;
                             }
                         }
@@ -446,7 +462,7 @@ class MainActivity : AppCompatActivity() {
                     v.addEventListener('loadedmetadata', track);
                 });
 
-                // XHR/Fetch Interceptor fuer HLS
+                // XHR/Fetch Interceptor fuer HLS (leichtgewichtig)
                 var origXHR = XMLHttpRequest.prototype.open;
                 XMLHttpRequest.prototype.open = function(method, url) {
                     if (url && typeof url === 'string') {
@@ -468,30 +484,31 @@ class MainActivity : AppCompatActivity() {
                     };
                 }
 
+                // MutationObserver: Nur fuer Video-Elemente, nicht alle Nodes
                 new MutationObserver(function(m) {
-                    m.forEach(function(mut) {
-                        mut.addedNodes.forEach(function(n) {
-                            if (n.nodeType === 1) {
-                                var vid = n.tagName === 'VIDEO' ? n : (n.querySelector ? n.querySelector('video') : null);
-                                if (vid) {
-                                    var s = vid.currentSrc || vid.src;
-                                    if (s) trackUrl(s, isStreamUrl(s));
-                                }
+                    for (var i = 0; i < m.length; i++) {
+                        var added = m[i].addedNodes;
+                        for (var j = 0; j < added.length; j++) {
+                            var n = added[j];
+                            if (n.nodeType !== 1) continue;
+                            var vid = n.tagName === 'VIDEO' ? n : (n.querySelector ? n.querySelector('video') : null);
+                            if (vid) {
+                                var s = vid.currentSrc || vid.src;
+                                if (s) trackUrl(s, isStreamUrl(s));
                             }
-                        });
-                    });
+                        }
+                    }
                 }).observe(document.body, { childList: true, subtree: true });
 
-                // FireTV Focus-Styles
+                // FireTV Focus-Styles (ohne smooth-scroll fuer bessere Performance)
                 var st = document.createElement('style');
                 st.textContent =
-                    ':focus { outline: 3px solid #FFD700 !important; outline-offset: 2px !important; box-shadow: 0 0 12px rgba(255,215,0,0.4) !important; }' +
-                    'a, button, input, select { min-height: 44px; min-width: 44px; }' +
-                    'html { scroll-behavior: smooth; }' +
+                    ':focus { outline: 3px solid #FFD700 !important; outline-offset: 2px !important; }' +
                     '.cookie-banner, .cookie-consent, .cookie-notice, #cookie-notice, .gdpr-consent { display: none !important; }';
                 document.head.appendChild(st);
 
-                document.querySelectorAll('a, button, input, [onclick], [role="button"]').forEach(function(el) {
+                // Nur Links und Buttons fokussierbar machen, nicht ALLE Elemente
+                document.querySelectorAll('a, button, [role="button"]').forEach(function(el) {
                     if (!el.getAttribute('tabindex')) el.setAttribute('tabindex', '0');
                 });
             })();
