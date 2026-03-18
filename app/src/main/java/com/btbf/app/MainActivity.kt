@@ -378,7 +378,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnHome.setOnClickListener { hideNavBar(); showSiteSelectorAgain() }
         binding.btnRefresh.setOnClickListener { webView.reload(); hideNavBar() }
         binding.btnDownload.setOnClickListener { findAndDownloadVideo() }
-        binding.btnFullscreen.setOnClickListener { toggleFullscreen() }
+        binding.btnPlay.setOnClickListener { manualPlayVideo(); hideNavBar() }
         binding.btnBack.setOnClickListener { if (webView.canGoBack()) webView.goBack() }
         binding.btnFavorites.setOnClickListener { showFavoritesDialog() }
 
@@ -847,7 +847,7 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                webView.evaluateJavascript("(function(){var v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}})();", null)
+                manualPlayVideo()
                 return true
             }
         }
@@ -912,6 +912,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun playInExoPlayer(url: String) {
+            CoroutineScope(Dispatchers.Main).launch {
+                launchExoPlayer(url)
+            }
+        }
+
+        @JavascriptInterface
         fun showToast(message: String) {
             CoroutineScope(Dispatchers.Main).launch { Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
         }
@@ -955,31 +962,146 @@ class MainActivity : AppCompatActivity() {
         return super.onTouchEvent(event)
     }
 
-    // ==================== AUTOPLAY ====================
+    // ==================== EXOPLAYER LAUNCH ====================
 
     private fun autoPlayVideo() {
-        // Versuche Video zu finden, automatisch abzuspielen und Vollbild zu aktivieren
+        // Suche Video-URL auf der Seite und starte ExoPlayer
         webView.evaluateJavascript("""
             (function() {
+                // Video-Element pruefen
                 var v = document.querySelector('video');
-                if (!v) return false;
-                v.muted = false;
-                v.play().then(function() {
-                    // Vollbild anfordern
-                    if (v.requestFullscreen) v.requestFullscreen();
-                    else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
-                    else if (v.webkitRequestFullScreen) v.webkitRequestFullScreen();
-                }).catch(function() {
-                    // Autoplay blockiert - versuche muted
-                    v.muted = true;
-                    v.play().then(function() {
-                        if (v.requestFullscreen) v.requestFullscreen();
-                        else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
-                    }).catch(function() {});
-                });
-                return true;
+                if (v) {
+                    // Video im WebView pausieren
+                    v.pause();
+                    var s = v.currentSrc || v.src;
+                    if (s && s.indexOf('blob:') !== 0) return s;
+                    // Source-Tags pruefen
+                    var sources = v.querySelectorAll('source');
+                    for (var i = 0; i < sources.length; i++) {
+                        if (sources[i].src && sources[i].src.indexOf('blob:') !== 0) return sources[i].src;
+                    }
+                }
+                // Tracked URLs pruefen
+                if (window._btbfStreamUrls && window._btbfStreamUrls.length > 0) return window._btbfStreamUrls[0];
+                if (window._btbfVideoUrls && window._btbfVideoUrls.length > 0) return window._btbfVideoUrls[0];
+                return null;
             })();
-        """.trimIndent(), null)
+        """.trimIndent()) { result ->
+            val url = result?.trim()?.removeSurrounding("\"")
+            if (!url.isNullOrEmpty() && url != "null") {
+                launchExoPlayer(url)
+            }
+        }
+    }
+
+    private fun manualPlayVideo() {
+        Toast.makeText(this, "Suche Video...", Toast.LENGTH_SHORT).show()
+        webView.evaluateJavascript("""
+            (function() {
+                var result = { direct: [], streams: [] };
+
+                // Video-Elemente
+                document.querySelectorAll('video').forEach(function(v) {
+                    v.pause();
+                    var s = v.currentSrc || v.src;
+                    if (s && s.indexOf('blob:') !== 0) {
+                        if (s.indexOf('.m3u8') !== -1 || s.indexOf('.mpd') !== -1)
+                            result.streams.push(s);
+                        else
+                            result.direct.push(s);
+                    }
+                    v.querySelectorAll('source').forEach(function(src) {
+                        if (src.src && src.src.indexOf('blob:') !== 0) {
+                            if (src.src.indexOf('.m3u8') !== -1)
+                                result.streams.push(src.src);
+                            else
+                                result.direct.push(src.src);
+                        }
+                    });
+                });
+
+                // Tracked URLs
+                if (window._btbfStreamUrls) window._btbfStreamUrls.forEach(function(u) {
+                    if (result.streams.indexOf(u) === -1) result.streams.push(u);
+                });
+                if (window._btbfVideoUrls) window._btbfVideoUrls.forEach(function(u) {
+                    if (result.direct.indexOf(u) === -1) result.direct.push(u);
+                });
+
+                // Script-Tags durchsuchen
+                var p = /https?:\/\/[^\s'"<>]+\.(mp4|m3u8|webm)[^\s'"<>]*/gi;
+                document.querySelectorAll('script').forEach(function(s) {
+                    var matches = (s.textContent || '').match(p);
+                    if (matches) matches.forEach(function(m) {
+                        if (m.indexOf('.m3u8') !== -1) {
+                            if (result.streams.indexOf(m) === -1) result.streams.push(m);
+                        } else {
+                            if (result.direct.indexOf(m) === -1) result.direct.push(m);
+                        }
+                    });
+                });
+
+                return JSON.stringify(result);
+            })();
+        """.trimIndent()) { jsResult ->
+            handlePlayResult(jsResult)
+        }
+    }
+
+    private fun handlePlayResult(jsResult: String?) {
+        val allUrls = mutableListOf<String>()
+        try {
+            val clean = jsResult?.trim()?.removeSurrounding("\"")
+                ?.replace("\\\"", "\"")?.replace("\\\\/", "/")?.replace("\\\\", "\\")
+            if (clean != null && clean != "null") {
+                val json = org.json.JSONObject(clean)
+                val streams = json.optJSONArray("streams")
+                val direct = json.optJSONArray("direct")
+                // HLS/Streams bevorzugen (bessere Qualitaet)
+                if (streams != null) for (i in 0 until streams.length()) allUrls.add(streams.getString(i))
+                if (direct != null) for (i in 0 until direct.length()) allUrls.add(direct.getString(i))
+            }
+        } catch (_: Exception) { }
+
+        // Native captured URLs hinzufuegen
+        synchronized(capturedStreamUrls) { capturedStreamUrls.forEach { if (!allUrls.contains(it)) allUrls.add(0, it) } }
+        synchronized(capturedDirectUrls) { capturedDirectUrls.forEach { if (!allUrls.contains(it)) allUrls.add(it) } }
+
+        allUrls.removeAll { isAdUrl(it) }
+
+        when {
+            allUrls.isEmpty() -> Toast.makeText(this, "Kein Video gefunden. Oeffne zuerst ein Video.", Toast.LENGTH_LONG).show()
+            allUrls.size == 1 -> launchExoPlayer(allUrls.first())
+            else -> {
+                // Mehrere URLs - Dialog
+                val labels = allUrls.mapIndexed { i, url ->
+                    val type = when {
+                        url.contains(".m3u8", true) -> "HLS"
+                        url.contains(".mp4", true) -> "MP4"
+                        url.contains(".webm", true) -> "WEBM"
+                        else -> "Video"
+                    }
+                    val short = if (url.length > 50) "...${url.takeLast(40)}" else url
+                    "[$type] ${i + 1}: $short"
+                }.toTypedArray()
+
+                AlertDialog.Builder(this)
+                    .setTitle("${allUrls.size} Videos gefunden")
+                    .setItems(labels) { _, which -> launchExoPlayer(allUrls[which]) }
+                    .setNegativeButton("Abbrechen", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun launchExoPlayer(videoUrl: String) {
+        val intent = android.content.Intent(this, VideoPlayerActivity::class.java).apply {
+            putExtra(VideoPlayerActivity.EXTRA_VIDEO_URL, videoUrl)
+            putExtra(VideoPlayerActivity.EXTRA_REFERER, webView.url ?: websiteUrl)
+            putExtra(VideoPlayerActivity.EXTRA_USER_AGENT, webView.settings.userAgentString)
+            putExtra(VideoPlayerActivity.EXTRA_TITLE, webView.title ?: "Video")
+        }
+        startActivity(intent)
     }
 
     // ==================== WEBVIEW HELPERS ====================
