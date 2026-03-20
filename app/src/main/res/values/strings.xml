@@ -46,4 +46,10 @@
     <string name="play_error_title">Wiedergabe fehlgeschlagen</string>
     <string name="play_error_generic">%1$s</string>
     <string name="open_in_browser">Seite im Browser öffnen</string>
+
+    <string name="nav_mouse">Maus</string>
+    <string name="cd_virtual_cursor">Virtueller Mauszeiger</string>
+    <string name="cd_mouse_mode">Mausmodus ein oder aus</string>
+    <string name="mouse_mode_on">Mausmodus: Kreuz bewegen mit Steuerkreuz, OK zum Klicken, Zurück oder Menü zum Beenden.</string>
+    <string name="mouse_mode_off">Mausmodus aus.</string>
 </resources>

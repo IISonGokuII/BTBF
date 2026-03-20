@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -77,6 +78,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var gestureDetector: GestureDetector
     private val handler = Handler(Looper.getMainLooper())
 
+    /** Fire-TV: virtueller Mauszeiger statt nur Fokus-Scroll */
+    private var pointerMode = false
+    private var pointerX = 0f
+    private var pointerY = 0f
+
     // Video-URL Tracking (direkte + Stream URLs)
     private val capturedDirectUrls = mutableListOf<String>()
     private val capturedStreamUrls = mutableListOf<String>()
@@ -131,25 +137,86 @@ class MainActivity : AppCompatActivity() {
         binding.rvSitePicker.layoutManager = LinearLayoutManager(this)
         binding.rvSitePicker.setHasFixedSize(true)
         binding.rvSitePicker.adapter = SitePickerAdapter(items) { site ->
-            BrowseActivity.launch(this, site.name, site.url)
+            openSiteInWebView(site)
         }
         binding.rvSitePicker.post {
             binding.rvSitePicker.getChildAt(0)?.requestFocus()
         }
     }
 
-    private fun selectSiteWebView(index: Int) {
-        val site = sites[index]
-        websiteUrl = site.url
-        currentSiteDomain = site.domain
-
-        // Auswahl ausblenden, Lade-Anzeige einblenden
+    /** Native BrowseActivity entfällt: gewählte Site direkt in der WebView laden. */
+    private fun openSiteInWebView(item: SitePickerItem) {
+        val cfg = sites.firstOrNull { it.url == item.url } ?: return
+        websiteUrl = cfg.url
+        currentSiteDomain = cfg.domain
+        binding.loadingSiteName.text = cfg.name
         binding.siteSelector.visibility = View.GONE
         binding.loadingIndicator.visibility = View.VISIBLE
-        binding.loadingSiteName.text = site.name
+        if (::webView.isInitialized) {
+            webView.stopLoading()
+            webView.loadUrl(cfg.url)
+        } else {
+            setupWebView()
+        }
+    }
 
-        // WebView jetzt erst initialisieren und laden
-        setupWebView()
+    // ==================== POINTER MODE (Fire TV „Maus“) ====================
+
+    private fun togglePointerModeFromToolbar() {
+        if (pointerMode) disablePointerMode()
+        else enablePointerMode()
+    }
+
+    private fun enablePointerMode() {
+        if (!::webView.isInitialized || isFullScreen || isSplashVisible) return
+        pointerMode = true
+        binding.virtualCursor.visibility = View.VISIBLE
+        webView.post {
+            val w = webView.width.toFloat()
+            val h = webView.height.toFloat()
+            if (w > 0 && h > 0) {
+                pointerX = w / 2f
+                pointerY = h / 2f
+                syncCursorPosition()
+            }
+        }
+        Toast.makeText(this, R.string.mouse_mode_on, Toast.LENGTH_LONG).show()
+    }
+
+    private fun disablePointerMode() {
+        pointerMode = false
+        binding.virtualCursor.visibility = View.GONE
+    }
+
+    private fun movePointer(dx: Float, dy: Float) {
+        if (!::webView.isInitialized) return
+        val w = webView.width.toFloat()
+        val h = webView.height.toFloat()
+        if (w <= 0 || h <= 0) return
+        pointerX = (pointerX + dx).coerceIn(0f, w - 1f)
+        pointerY = (pointerY + dy).coerceIn(0f, h - 1f)
+        syncCursorPosition()
+    }
+
+    private fun syncCursorPosition() {
+        val cw = binding.virtualCursor.width.takeIf { it > 0 }
+            ?: (36f * resources.displayMetrics.density).toInt()
+        val half = cw / 2f
+        binding.virtualCursor.translationX = pointerX - half
+        binding.virtualCursor.translationY = pointerY - half
+    }
+
+    private fun injectPointerClick() {
+        if (!::webView.isInitialized) return
+        val t = SystemClock.uptimeMillis()
+        MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, pointerX, pointerY, 0).apply {
+            webView.dispatchTouchEvent(this)
+            recycle()
+        }
+        MotionEvent.obtain(t, t + 60, MotionEvent.ACTION_UP, pointerX, pointerY, 0).apply {
+            webView.dispatchTouchEvent(this)
+            recycle()
+        }
     }
 
     // ==================== PERMISSIONS ====================
@@ -250,6 +317,7 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 binding.progressBar.visibility = View.GONE
+                binding.loadingIndicator.visibility = View.GONE
                 injectComfortScripts()
                 injectVideoClickInterceptor()
                 autoPlayVideo()
@@ -277,6 +345,7 @@ class MainActivity : AppCompatActivity() {
                 customViewCallback?.onCustomViewHidden()
                 customViewCallback = null
                 isFullScreen = false
+                disablePointerMode()
                 showSystemUI()
                 binding.fullscreenContainer.visibility = View.GONE
                 binding.webViewContainer.visibility = View.VISIBLE
@@ -407,6 +476,10 @@ class MainActivity : AppCompatActivity() {
         binding.btnPlay.setOnClickListener { manualPlayVideo(); hideNavBar() }
         binding.btnBack.setOnClickListener { if (webView.canGoBack()) webView.goBack() }
         binding.btnFavorites.setOnClickListener { showFavoritesDialog() }
+        binding.btnPointer.setOnClickListener {
+            hideNavBar()
+            togglePointerModeFromToolbar()
+        }
 
         binding.btnCatHome.setOnClickListener { webView.loadUrl(websiteUrl); hideCategoryBar() }
         binding.btnCatNew.setOnClickListener { webView.loadUrl("${websiteUrl}new"); hideCategoryBar() }
@@ -837,6 +910,37 @@ class MainActivity : AppCompatActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (!::webView.isInitialized) return super.onKeyDown(keyCode, event)
 
+        if (pointerMode && !isNavVisible && !isCategoryVisible && !isFullScreen && !isSplashVisible) {
+            val step = 22f * resources.displayMetrics.density
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    movePointer(-step, 0f)
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    movePointer(step, 0f)
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    movePointer(0f, -step)
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    movePointer(0f, step)
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    injectPointerClick()
+                    return true
+                }
+                KeyEvent.KEYCODE_BACK -> {
+                    disablePointerMode()
+                    Toast.makeText(this, R.string.mouse_mode_off, Toast.LENGTH_SHORT).show()
+                    return true
+                }
+            }
+        }
+
         // Wenn Nav-Bar oder Category-Bar sichtbar ist: D-Pad steuert die Buttons
         if (isNavVisible || isCategoryVisible) {
             when (keyCode) {
@@ -904,6 +1008,11 @@ class MainActivity : AppCompatActivity() {
                 showSiteSelectorAgain(); return true
             }
             KeyEvent.KEYCODE_MENU -> {
+                if (pointerMode) {
+                    disablePointerMode()
+                    Toast.makeText(this, R.string.mouse_mode_off, Toast.LENGTH_SHORT).show()
+                    return true
+                }
                 if (event?.repeatCount == 0) {
                     handler.postDelayed({
                         if (!isMenuLongPress) toggleNavBar()
@@ -941,6 +1050,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSiteSelectorAgain() {
+        disablePointerMode()
         if (::webView.isInitialized) {
             webView.stopLoading()
             webView.loadUrl("about:blank")

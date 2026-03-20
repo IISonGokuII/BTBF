@@ -17,6 +17,17 @@
             android:id="@+id/webView"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <ImageView
+            android:id="@+id/virtualCursor"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="top|start"
+            android:contentDescription="@string/cd_virtual_cursor"
+            android:elevation="16dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_virtual_cursor"
+            android:visibility="gone" />
     </FrameLayout>
 
     <!-- Fullscreen Container fuer Video -->
@@ -434,6 +445,35 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Favoriten"
+                android:textColor="@color/text_secondary"
+                android:textSize="10sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <!-- Mausmodus (Fire TV: kleine Felder / Links klicken) -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageButton
+                android:id="@+id/btnPointer"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/nav_btn_bg"
+                android:contentDescription="@string/cd_mouse_mode"
+                android:padding="12dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_virtual_cursor"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/nav_mouse"
                 android:textColor="@color/text_secondary"
                 android:textSize="10sp"
                 android:layout_marginTop="2dp" />
