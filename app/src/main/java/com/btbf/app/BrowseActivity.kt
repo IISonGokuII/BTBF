@@ -8,6 +8,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
+import android.webkit.CookieManager
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -89,6 +90,22 @@ class BrowseActivity : AppCompatActivity() {
         binding.toolbar.navigationIcon?.setTint(
             ContextCompat.getColor(this, R.color.text_primary)
         )
+        binding.toolbar.inflateMenu(R.menu.browse_menu)
+        binding.toolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_open_site_home -> {
+                    openInWebView(siteUrl)
+                    true
+                }
+                R.id.action_clear_cookies -> {
+                    CookieManager.getInstance().removeAllCookies(null)
+                    CookieManager.getInstance().flush()
+                    Toast.makeText(this, R.string.cookies_cleared, Toast.LENGTH_LONG).show()
+                    true
+                }
+                else -> false
+            }
+        }
 
         setupAdapters()
         setupGrid()
@@ -409,6 +426,7 @@ class BrowseActivity : AppCompatActivity() {
         val intent = Intent(this, VideoPlayerActivity::class.java).apply {
             putExtra(VideoPlayerActivity.EXTRA_VIDEO_URL, videoUrl)
             putExtra(VideoPlayerActivity.EXTRA_REFERER, referer)
+            putExtra(VideoPlayerActivity.EXTRA_USER_AGENT, WebViewListingExtractor.DEFAULT_USER_AGENT)
             putExtra(VideoPlayerActivity.EXTRA_TITLE, title)
         }
         startActivity(intent)
@@ -439,49 +457,80 @@ class BrowseActivity : AppCompatActivity() {
         Toast.makeText(this, "Suche Download-URL...", Toast.LENGTH_SHORT).show()
         CoroutineScope(Dispatchers.Main).launch {
             val detail = scraper.getVideoDetail(video.pageUrl)
-            if (detail != null && detail.videoSources.isNotEmpty()) {
-                val source = detail.videoSources.firstOrNull { s ->
-                    s.type != VideoSourceType.DASH && !videoDownloadHelper.isDashUrl(s.url)
-                } ?: detail.videoSources.first()
-
-                if (source.type == VideoSourceType.DASH || videoDownloadHelper.isDashUrl(source.url)) {
-                    AlertDialog.Builder(this@BrowseActivity)
-                        .setTitle(R.string.dash_download_title)
-                        .setMessage(R.string.dash_download_message)
-                        .setPositiveButton(R.string.ok, null)
-                        .show()
-                    return@launch
-                }
-
-                when (source.type) {
-                    VideoSourceType.HLS -> {
-                        Toast.makeText(this@BrowseActivity, "HLS Download gestartet...", Toast.LENGTH_SHORT).show()
-                        videoDownloadHelper.downloadHlsStream(
-                            m3u8Url = source.url,
-                            referer = video.pageUrl,
-                            userAgent = WebViewListingExtractor.DEFAULT_USER_AGENT,
-                            onProgress = { progress, message ->
-                                if (progress % 20 == 0) {
-                                    Toast.makeText(this@BrowseActivity, "$message ($progress%)", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onComplete = { file ->
-                                val msg = if (file != null) "Download fertig: ${file.name}" else "Download fehlgeschlagen"
-                                Toast.makeText(this@BrowseActivity, msg, Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    }
-                    else -> {
-                        videoDownloadHelper.downloadDirect(
-                            source.url,
-                            video.pageUrl,
-                            WebViewListingExtractor.DEFAULT_USER_AGENT
-                        )
-                        Toast.makeText(this@BrowseActivity, "Download gestartet!", Toast.LENGTH_SHORT).show()
-                    }
-                }
+            if (detail == null || detail.videoSources.isEmpty()) {
+                Toast.makeText(this@BrowseActivity, R.string.download_no_sources, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val sources = detail.videoSources
+            if (sources.size == 1) {
+                startDownloadWithSource(sources.first(), video)
             } else {
-                Toast.makeText(this@BrowseActivity, "Keine Download-URL gefunden", Toast.LENGTH_SHORT).show()
+                showDownloadSourcePicker(sources, video)
+            }
+        }
+    }
+
+    private fun showDownloadSourcePicker(sources: List<VideoSource>, video: VideoItem) {
+        val labels = sources.mapIndexed { i, src ->
+            val type = when (src.type) {
+                VideoSourceType.HLS -> "HLS"
+                VideoSourceType.DASH -> "DASH"
+                VideoSourceType.DIRECT -> when {
+                    src.url.contains(".mp4", true) -> "MP4"
+                    src.url.contains(".webm", true) -> "WEBM"
+                    else -> "Video"
+                }
+            }
+            val quality = if (src.quality.isNotEmpty()) " ${src.quality}" else ""
+            val dashOnly = src.type == VideoSourceType.DASH || videoDownloadHelper.isDashUrl(src.url)
+            val suffix = if (dashOnly) getString(R.string.download_label_dash_suffix) else ""
+            "[$type$quality] ${i + 1}$suffix"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.download_pick_source)
+            .setItems(labels) { _, which ->
+                startDownloadWithSource(sources[which], video)
+            }
+            .setNegativeButton(R.string.nav_back, null)
+            .show()
+    }
+
+    private fun startDownloadWithSource(source: VideoSource, video: VideoItem) {
+        if (source.type == VideoSourceType.DASH || videoDownloadHelper.isDashUrl(source.url)) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.dash_download_title)
+                .setMessage(R.string.dash_download_message)
+                .setPositiveButton(R.string.ok, null)
+                .show()
+            return
+        }
+        when (source.type) {
+            VideoSourceType.HLS -> {
+                Toast.makeText(this, "HLS Download gestartet...", Toast.LENGTH_SHORT).show()
+                CoroutineScope(Dispatchers.Main).launch {
+                    videoDownloadHelper.downloadHlsStream(
+                        m3u8Url = source.url,
+                        referer = video.pageUrl,
+                        userAgent = WebViewListingExtractor.DEFAULT_USER_AGENT,
+                        onProgress = { progress, message ->
+                            if (progress % 20 == 0) {
+                                Toast.makeText(this@BrowseActivity, "$message ($progress%)", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onComplete = { file ->
+                            val msg = if (file != null) "Download fertig: ${file.name}" else "Download fehlgeschlagen"
+                            Toast.makeText(this@BrowseActivity, msg, Toast.LENGTH_LONG).show()
+                        }
+                    )
+                }
+            }
+            else -> {
+                videoDownloadHelper.downloadDirect(
+                    source.url,
+                    video.pageUrl,
+                    WebViewListingExtractor.DEFAULT_USER_AGENT
+                )
+                Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -500,11 +549,34 @@ class BrowseActivity : AppCompatActivity() {
                 return true
             }
             KeyEvent.KEYCODE_MENU -> {
-                finish()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    binding.toolbar.showOverflowMenu()
+                } else {
+                    showFallbackToolbarMenu()
+                }
                 return true
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    private fun showFallbackToolbarMenu() {
+        val items = arrayOf(
+            getString(R.string.menu_open_site_home),
+            getString(R.string.menu_clear_cookies)
+        )
+        AlertDialog.Builder(this)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> openInWebView(siteUrl)
+                    1 -> {
+                        CookieManager.getInstance().removeAllCookies(null)
+                        CookieManager.getInstance().flush()
+                        Toast.makeText(this, R.string.cookies_cleared, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .show()
     }
 
     private fun hideSystemUI() {

@@ -28,6 +28,8 @@ class VideoDownloadHelper(private val context: Context) {
     companion object {
         private const val CHANNEL_ID = "btbf_download"
         private const val NOTIFICATION_ID = 9001
+        private const val FETCH_MAX_ATTEMPTS = 3
+        private const val FETCH_RETRY_DELAY_MS = 400L
         private val VIDEO_EXTENSIONS = listOf(".mp4", ".webm", ".mkv", ".avi", ".mov", ".m4v", ".flv", ".wmv")
         private val STREAM_EXTENSIONS = listOf(".m3u8", ".mpd")
     }
@@ -401,6 +403,14 @@ class VideoDownloadHelper(private val context: Context) {
     }
 
     private fun fetchUrl(url: String, referer: String?, userAgent: String, cookie: String?): String? {
+        repeat(FETCH_MAX_ATTEMPTS) { attempt ->
+            fetchUrlOnce(url, referer, userAgent, cookie)?.let { return it }
+            if (attempt < FETCH_MAX_ATTEMPTS - 1) Thread.sleep(FETCH_RETRY_DELAY_MS)
+        }
+        return null
+    }
+
+    private fun fetchUrlOnce(url: String, referer: String?, userAgent: String, cookie: String?): String? {
         return try {
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.apply {
@@ -408,8 +418,8 @@ class VideoDownloadHelper(private val context: Context) {
                 setRequestProperty("User-Agent", userAgent)
                 if (referer != null) setRequestProperty("Referer", referer)
                 if (!cookie.isNullOrEmpty()) setRequestProperty("Cookie", cookie)
-                connectTimeout = 15000
-                readTimeout = 30000
+                connectTimeout = 20000
+                readTimeout = 35000
             }
             val reader = BufferedReader(InputStreamReader(conn.inputStream))
             val result = reader.readText()
@@ -422,6 +432,14 @@ class VideoDownloadHelper(private val context: Context) {
     }
 
     private fun fetchUrlBytes(url: String, referer: String?, userAgent: String, cookie: String?): ByteArray? {
+        repeat(FETCH_MAX_ATTEMPTS) { attempt ->
+            fetchUrlBytesOnce(url, referer, userAgent, cookie)?.let { return it }
+            if (attempt < FETCH_MAX_ATTEMPTS - 1) Thread.sleep(FETCH_RETRY_DELAY_MS)
+        }
+        return null
+    }
+
+    private fun fetchUrlBytesOnce(url: String, referer: String?, userAgent: String, cookie: String?): ByteArray? {
         return try {
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.apply {
@@ -429,8 +447,8 @@ class VideoDownloadHelper(private val context: Context) {
                 setRequestProperty("User-Agent", userAgent)
                 if (referer != null) setRequestProperty("Referer", referer)
                 if (!cookie.isNullOrEmpty()) setRequestProperty("Cookie", cookie)
-                connectTimeout = 15000
-                readTimeout = 60000
+                connectTimeout = 20000
+                readTimeout = 90000
             }
             val data = conn.inputStream.readBytes()
             conn.disconnect()

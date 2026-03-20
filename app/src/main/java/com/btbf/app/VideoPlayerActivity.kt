@@ -1,5 +1,6 @@
 package com.btbf.app
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -7,6 +8,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -18,12 +20,18 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.btbf.app.databinding.ActivityVideoPlayerBinding
+import com.btbf.app.scraper.WebViewListingExtractor
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class VideoPlayerActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityVideoPlayerBinding
     private var player: ExoPlayer? = null
+    private lateinit var videoUrl: String
+    private var referer: String = ""
+    private var userAgent: String = ""
+    /** Video-Seite für WebView-Fallback bei Fehler */
+    private var pageUrlForFallback: String = ""
 
     companion object {
         const val EXTRA_VIDEO_URL = "video_url"
@@ -46,83 +54,110 @@ class VideoPlayerActivity : AppCompatActivity() {
 
         hideSystemUI()
 
-        val videoUrl = intent.getStringExtra(EXTRA_VIDEO_URL)
-        if (videoUrl.isNullOrEmpty()) {
+        val url = intent.getStringExtra(EXTRA_VIDEO_URL)
+        if (url.isNullOrEmpty()) {
             Toast.makeText(this, "Keine Video-URL", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
 
-        initializePlayer(videoUrl)
+        videoUrl = url
+        referer = intent.getStringExtra(EXTRA_REFERER) ?: ""
+        userAgent = intent.getStringExtra(EXTRA_USER_AGENT)
+            ?: WebViewListingExtractor.DEFAULT_USER_AGENT
+        pageUrlForFallback = referer.ifEmpty { videoUrl }
+
+        initializePlayer()
     }
 
-    private fun initializePlayer(videoUrl: String) {
-        val referer = intent.getStringExtra(EXTRA_REFERER) ?: ""
-        val userAgent = intent.getStringExtra(EXTRA_USER_AGENT)
-            ?: "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    private fun initializePlayer() {
+        player?.release()
+        player = null
 
-        player = ExoPlayer.Builder(this).build().also { exoPlayer ->
-            binding.playerView.player = exoPlayer
+        val exoPlayer = ExoPlayer.Builder(this).build()
+        player = exoPlayer
+        binding.playerView.player = exoPlayer
 
-            val dataSourceFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(userAgent)
-                .setDefaultRequestProperties(
-                    buildMap {
-                        if (referer.isNotEmpty()) put("Referer", referer)
-                        put("Origin", referer.takeIf { it.isNotEmpty() }
-                            ?.let { Uri.parse(it).let { u -> "${u.scheme}://${u.host}" } } ?: "")
-                    }.filterValues { it.isNotEmpty() }
-                )
-                .setConnectTimeoutMs(15000)
-                .setReadTimeoutMs(15000)
-                .setAllowCrossProtocolRedirects(true)
+        val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(userAgent)
+            .setDefaultRequestProperties(
+                buildMap {
+                    if (referer.isNotEmpty()) put("Referer", referer)
+                    put(
+                        "Origin",
+                        referer.takeIf { it.isNotEmpty() }
+                            ?.let { Uri.parse(it).let { u -> "${u.scheme}://${u.host}" } } ?: ""
+                    )
+                }.filterValues { it.isNotEmpty() }
+            )
+            .setConnectTimeoutMs(22_000)
+            .setReadTimeoutMs(22_000)
+            .setAllowCrossProtocolRedirects(true)
 
-            val mediaSource: MediaSource = when {
-                videoUrl.contains(".m3u8", ignoreCase = true) -> {
-                    HlsMediaSource.Factory(dataSourceFactory)
-                        .setAllowChunklessPreparation(true)
-                        .createMediaSource(MediaItem.fromUri(videoUrl))
-                }
-                videoUrl.contains(".mpd", ignoreCase = true) -> {
-                    // DASH - fallback to progressive
-                    ProgressiveMediaSource.Factory(dataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(videoUrl))
-                }
-                else -> {
-                    ProgressiveMediaSource.Factory(dataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(videoUrl))
+        val mediaSource: MediaSource = when {
+            videoUrl.contains(".m3u8", ignoreCase = true) -> {
+                HlsMediaSource.Factory(dataSourceFactory)
+                    .setAllowChunklessPreparation(true)
+                    .createMediaSource(MediaItem.fromUri(videoUrl))
+            }
+            videoUrl.contains(".mpd", ignoreCase = true) -> {
+                DashMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(MediaItem.fromUri(videoUrl))
+            }
+            else -> {
+                ProgressiveMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(MediaItem.fromUri(videoUrl))
+            }
+        }
+
+        exoPlayer.setMediaSource(mediaSource)
+
+        exoPlayer.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                binding.loadingSpinner.visibility = when (playbackState) {
+                    Player.STATE_BUFFERING -> View.VISIBLE
+                    else -> View.GONE
                 }
             }
 
-            exoPlayer.setMediaSource(mediaSource)
+            override fun onPlayerError(error: PlaybackException) {
+                exoPlayer.stop()
+                exoPlayer.release()
+                player = null
+                binding.playerView.player = null
+                binding.loadingSpinner.visibility = View.GONE
+                showPlaybackErrorDialog(error)
+            }
+        })
 
-            exoPlayer.addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    binding.loadingSpinner.visibility = when (playbackState) {
-                        Player.STATE_BUFFERING -> View.VISIBLE
-                        else -> View.GONE
-                    }
-                }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    val hint = if (videoUrl.contains(".mpd", ignoreCase = true)) {
-                        "\n${getString(R.string.dash_play_error)}"
-                    } else ""
-                    Toast.makeText(
-                        this@VideoPlayerActivity,
-                        "Wiedergabe-Fehler: ${error.localizedMessage}$hint",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    finish()
-                }
-            })
-
-            exoPlayer.playWhenReady = true
-            exoPlayer.prepare()
-        }
+        exoPlayer.playWhenReady = true
+        exoPlayer.prepare()
     }
 
-    // ==================== FIRETV CONTROLS ====================
+    private fun showPlaybackErrorDialog(error: PlaybackException) {
+        val baseMsg = error.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: error.message
+            ?: getString(R.string.loading)
+        val msg = buildString {
+            append(getString(R.string.play_error_generic, baseMsg))
+            if (videoUrl.contains(".mpd", ignoreCase = true)) {
+                append("\n\n").append(getString(R.string.dash_play_error))
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.play_error_title)
+            .setMessage(msg)
+            .setPositiveButton(R.string.retry) { _, _ -> initializePlayer() }
+            .setNeutralButton(R.string.open_in_browser) { _, _ ->
+                startActivity(
+                    Intent(this, MainActivity::class.java).putExtra("fallback_url", pageUrlForFallback)
+                )
+                finish()
+            }
+            .setNegativeButton(R.string.nav_back) { _, _ -> finish() }
+            .setCancelable(false)
+            .show()
+    }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val p = player ?: return super.onKeyDown(keyCode, event)
@@ -131,8 +166,14 @@ class VideoPlayerActivity : AppCompatActivity() {
                 if (p.isPlaying) p.pause() else p.play()
                 return true
             }
-            KeyEvent.KEYCODE_MEDIA_PLAY -> { p.play(); return true }
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { p.pause(); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                p.play()
+                return true
+            }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                p.pause()
+                return true
+            }
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
                 p.seekTo(maxOf(0, p.currentPosition - 10000))
                 return true
@@ -149,13 +190,11 @@ class VideoPlayerActivity : AppCompatActivity() {
         return super.onKeyDown(keyCode, event)
     }
 
-    // ==================== SYSTEM UI ====================
-
     private fun hideSystemUI() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.insetsController?.hide(
                 android.view.WindowInsets.Type.statusBars() or
-                android.view.WindowInsets.Type.navigationBars()
+                    android.view.WindowInsets.Type.navigationBars()
             )
             window.insetsController?.systemBarsBehavior =
                 android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -163,13 +202,11 @@ class VideoPlayerActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN
+                )
         }
     }
-
-    // ==================== LIFECYCLE ====================
 
     override fun onPause() {
         super.onPause()

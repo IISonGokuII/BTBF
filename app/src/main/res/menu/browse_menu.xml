@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/action_open_site_home"
+        android:title="@string/menu_open_site_home"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_clear_cookies"
+        android:title="@string/menu_clear_cookies"
+        app:showAsAction="never" />
+</menu>

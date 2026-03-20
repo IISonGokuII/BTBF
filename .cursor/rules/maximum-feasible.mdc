@@ -1,0 +1,9 @@
+---
+description: BTBF-App — maximal machbar ohne Scope-Creep
+globs: "**/*"
+---
+
+- Ziel ist **maximale praktische Zuverlässigkeit** (Fallbacks, Retries, klare Nutzerhinweise), nicht „perfekt auf jeder Domain“.
+- Neue Features an **bestehende Patterns** im Repo anbinden (Kotlin, Material, gleiche Packages).
+- **DRM**, **rechtliche Grenzen** und **fremde ToS** nicht umgehen; technisch Unmögliches nicht versprechen.
+- Bei Streaming: bevorzugt **ExoPlayer/Media3-konforme** Quellen (HLS, DASH, Progressive); Downloads nur wo sinnvoll umsetzbar.

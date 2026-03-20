@@ -34,4 +34,16 @@
     <string name="dash_play_unsupported_title">DASH-Wiedergabe</string>
     <string name="dash_play_error">DASH-Stream konnte nicht gestartet werden.</string>
     <string name="ok">OK</string>
+
+    <string name="menu_open_site_home">Startseite im Browser</string>
+    <string name="menu_clear_cookies">Cookies &amp; WebView-Daten löschen</string>
+    <string name="cookies_cleared">Cookies gelöscht. Beim nächsten Laden neu anmelden falls nötig.</string>
+
+    <string name="download_no_sources">Keine Download-URL gefunden</string>
+    <string name="download_pick_source">Download-Quelle wählen</string>
+    <string name="download_label_dash_suffix"> — DASH: kein Datei-Download</string>
+
+    <string name="play_error_title">Wiedergabe fehlgeschlagen</string>
+    <string name="play_error_generic">%1$s</string>
+    <string name="open_in_browser">Seite im Browser öffnen</string>
 </resources>
