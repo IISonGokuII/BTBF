@@ -31,8 +31,10 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ArrayAdapter
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
@@ -54,13 +56,18 @@ class MainActivity : AppCompatActivity() {
     private var isSplashVisible = true
 
     // Site-Konfiguration
-    private data class SiteConfig(val name: String, val url: String, val domain: String)
+    private data class SiteConfig(
+        val name: String,
+        val url: String,
+        val domain: String,
+        @StringRes val subtitleRes: Int
+    )
     private val sites = listOf(
-        SiteConfig("BTBF", "https://de.borntobefuck.com/", "borntobefuck"),
-        SiteConfig("CamCaps", "https://camcaps.tv/", "camcaps.tv"),
-        SiteConfig("FyxXR", "https://fyxxr.com/", "fyxxr.com"),
-        SiteConfig("SheeshFans", "https://sheeshfans.com/", "sheeshfans.com"),
-        SiteConfig("LeakPorner", "https://leakporner.com/", "leakporner.com")
+        SiteConfig("BTBF", "https://de.borntobefuck.com/", "borntobefuck", R.string.site_btbf_sub),
+        SiteConfig("CamCaps", "https://camcaps.tv/", "camcaps.tv", R.string.site_camcaps_sub),
+        SiteConfig("FyxXR", "https://fyxxr.com/", "fyxxr.com", R.string.site_fyxxr_sub),
+        SiteConfig("SheeshFans", "https://sheeshfans.com/", "sheeshfans.com", R.string.site_sheesh_sub),
+        SiteConfig("LeakPorner", "https://leakporner.com/", "leakporner.com", R.string.site_leakporner_sub)
     )
     private var websiteUrl = ""
     private var currentSiteDomain = ""
@@ -118,21 +125,17 @@ class MainActivity : AppCompatActivity() {
     // ==================== SITE SELECTOR ====================
 
     private fun setupSiteSelector() {
-        binding.btnSiteBtbf.setOnClickListener { selectSite(0) }
-        binding.btnSiteCamcaps.setOnClickListener { selectSite(1) }
-        binding.btnSiteFyxxr.setOnClickListener { selectSite(2) }
-        binding.btnSiteSheeshfans.setOnClickListener { selectSite(3) }
-        binding.btnSiteLeakporner.setOnClickListener { selectSite(4) }
-
-        // Ersten Eintrag fokussieren (FireTV)
-        binding.btnSiteBtbf.requestFocus()
-    }
-
-    private fun selectSite(index: Int) {
-        val site = sites[index]
-
-        // Nativ-Modus: BrowseActivity mit Scraper öffnen
-        BrowseActivity.launch(this, site.name, site.url)
+        val items = sites.map { s ->
+            SitePickerItem(s.name, s.url, getString(s.subtitleRes))
+        }
+        binding.rvSitePicker.layoutManager = LinearLayoutManager(this)
+        binding.rvSitePicker.setHasFixedSize(true)
+        binding.rvSitePicker.adapter = SitePickerAdapter(items) { site ->
+            BrowseActivity.launch(this, site.name, site.url)
+        }
+        binding.rvSitePicker.post {
+            binding.rvSitePicker.getChildAt(0)?.requestFocus()
+        }
     }
 
     private fun selectSiteWebView(index: Int) {
@@ -951,7 +954,7 @@ class MainActivity : AppCompatActivity() {
         binding.splashOverlay.visibility = View.VISIBLE
         binding.siteSelector.visibility = View.VISIBLE
         binding.loadingIndicator.visibility = View.GONE
-        binding.btnSiteBtbf.requestFocus()
+        binding.rvSitePicker.post { binding.rvSitePicker.getChildAt(0)?.requestFocus() }
     }
 
     override fun onDestroy() {
@@ -1344,8 +1347,16 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val clean = result.trim().removeSurrounding("\"").replace("\\\"", "\"").replace("\\\\/", "/")
                     val json = org.json.JSONObject(clean)
-                    val id = webView.url?.hashCode()?.toString() ?: System.currentTimeMillis().toString()
-                    favoritesManager.addFavoriteVideo(id, json.optString("title", "Video"), json.optString("thumbnail", ""))
+                    val pageUrl = webView.url?.trim()?.trimEnd('/')
+                    if (pageUrl.isNullOrEmpty()) {
+                        Toast.makeText(this, "Keine Seiten-URL", Toast.LENGTH_SHORT).show()
+                        return@evaluateJavascript
+                    }
+                    favoritesManager.addFavoriteVideo(
+                        pageUrl,
+                        json.optString("title", "Video"),
+                        json.optString("thumbnail", "")
+                    )
                     Toast.makeText(this, "Favorit gespeichert!", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) { Toast.makeText(this, "Fehler: ${e.message}", Toast.LENGTH_SHORT).show() }
             }

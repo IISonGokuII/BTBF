@@ -5,13 +5,25 @@ import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 
+/**
+ * Scraper für de.borntobefuck.com (Laravel + Infinite-Scroll, deutsche URL-Pfade).
+ * HTML-Struktur: window.routes + div.video / .chunk-videos, Suche per GET name=search.
+ */
 class BtbfScraper : SiteScraper {
     override val siteName = "BTBF"
     override val baseUrl = "https://de.borntobefuck.com/"
 
-    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    private val userAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     private val timeout = 15000
+
+    private val baseRoot: String get() = baseUrl.trimEnd('/')
 
     private suspend fun fetchDocument(url: String): Document? = withContext(Dispatchers.IO) {
         try {
@@ -19,19 +31,21 @@ class BtbfScraper : SiteScraper {
                 .userAgent(userAgent)
                 .timeout(timeout)
                 .followRedirects(true)
+                .header("Accept-Language", "de-DE,de;q=0.9,en;q=0.8")
+                .referrer(baseUrl)
                 .get()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
 
     override suspend fun getHomePage(): PaginatedResult {
-        return getPage(baseUrl)
+        val url = "$baseRoot/?sort=trending&page=1"
+        val doc = fetchDocument(url) ?: return PaginatedResult(emptyList(), false)
+        return parseVideoList(doc, url)
     }
 
-    override suspend fun getCategory(categoryUrl: String): PaginatedResult {
-        return getPage(categoryUrl)
-    }
+    override suspend fun getCategory(categoryUrl: String): PaginatedResult = getPage(categoryUrl)
 
     override suspend fun getPage(pageUrl: String): PaginatedResult {
         val doc = fetchDocument(pageUrl) ?: return PaginatedResult(emptyList(), false)
@@ -39,129 +53,89 @@ class BtbfScraper : SiteScraper {
     }
 
     override suspend fun search(query: String, page: Int): PaginatedResult {
-        val searchUrl = "${baseUrl}search/${query.replace(" ", "+")}/${if (page > 1) "?page=$page" else ""}"
+        val enc = URLEncoder.encode(query, Charsets.UTF_8.name())
+        val pageParam = if (page > 1) "&page=$page" else ""
+        val searchUrl = "${baseRoot}/suche/ergebnisse?search=$enc$pageParam"
         val doc = fetchDocument(searchUrl) ?: return PaginatedResult(emptyList(), false)
         return parseVideoList(doc, searchUrl)
     }
 
     override suspend fun getSorted(sort: SortOrder, page: Int): PaginatedResult {
-        val url = "${baseUrl}${sort.path}/${if (page > 1) "?page=$page" else ""}"
+        val sortParam = when (sort) {
+            SortOrder.NEWEST -> "latest"
+            SortOrder.TOP -> "mostLiked"
+            SortOrder.LONGEST -> "longest"
+            SortOrder.RANDOM -> "random"
+        }
+        val pageParam = if (page > 1) "&page=$page" else ""
+        val url = "${baseRoot}/videos?sort=$sortParam$pageParam"
         val doc = fetchDocument(url) ?: return PaginatedResult(emptyList(), false)
         return parseVideoList(doc, url)
     }
 
     override suspend fun getActors(page: Int): List<ActorItem> {
-        val urls = listOf(
-            "${baseUrl}models/", "${baseUrl}actors/", "${baseUrl}pornstars/",
-            "${baseUrl}girls/", "${baseUrl}performers/"
-        )
-        for (url in urls) {
-            val pageUrl = if (page > 1) "${url}?page=$page" else url
-            val doc = fetchDocument(pageUrl) ?: continue
-            val actors = mutableListOf<ActorItem>()
+        val pageParam = if (page > 1) "?page=$page" else ""
+        val url = "${baseRoot}/models$pageParam"
+        val doc = fetchDocument(url) ?: return emptyList()
+        val actors = mutableListOf<ActorItem>()
 
-            // Verschiedene Selektoren für Model/Actor-Listen
-            val selectors = listOf(
-                ".model-list .model-item", ".models-list .model",
-                ".pornstar-list .pornstar", ".actor-list .actor",
-                ".list-models .item", ".model-block", ".performer-item",
-                ".thumbs .thumb", ".thumb-list .thumb"
-            )
-
-            for (selector in selectors) {
-                val elements = doc.select(selector)
-                if (elements.isNotEmpty()) {
-                    for (el in elements) {
-                        val link = el.selectFirst("a[href]") ?: continue
-                        val name = el.selectFirst(".name, .title, h3, h4")?.text()?.trim()
-                            ?: el.selectFirst("img")?.attr("alt")?.trim()
-                            ?: link.text().trim()
-                        if (name.isEmpty()) continue
-                        val href = resolveUrl(link.attr("href"))
-                        val thumb = el.selectFirst("img")?.let { getImgSrc(it) } ?: ""
-                        val count = el.selectFirst(".count, .videos-count, .num")?.text()?.trim() ?: ""
-                        actors.add(ActorItem(name, href, thumb, count))
-                    }
-                    return actors
-                }
+        val cards = doc.select(".chunk-cards li.card a.card-link[href*=/models/]")
+        if (cards.isNotEmpty()) {
+            for (link in cards) {
+                val href = resolveUrl(link.attr("href"))
+                val name = link.selectFirst("h3.card-title")?.text()?.trim()
+                    ?: link.selectFirst("img.model-image")?.attr("alt")?.substringBefore(" Borntobefuck")?.trim()
+                    ?: link.selectFirst("img")?.attr("alt")?.trim()
+                    ?: continue
+                if (name.isEmpty()) continue
+                val thumb = link.selectFirst("img.model-image")?.let { getImgSrc(it) }
+                    ?: link.selectFirst("img")?.let { getImgSrc(it) } ?: ""
+                val rank = link.selectFirst(".avatar-rank")?.text()?.trim() ?: ""
+                actors.add(ActorItem(name, href, thumb, rank))
             }
-
-            // Fallback: Links mit Bildern auf der Seite
-            val allLinks = doc.select("a[href]")
-            for (link in allLinks) {
-                val href = link.attr("href")
-                if (href.contains("/model/") || href.contains("/actor/") ||
-                    href.contains("/pornstar/") || href.contains("/girl/")
-                ) {
-                    val img = link.selectFirst("img")
-                    val name = img?.attr("alt")?.trim() ?: link.text().trim()
-                    val thumb = img?.let { getImgSrc(it) } ?: ""
-                    if (name.isNotEmpty()) {
-                        actors.add(ActorItem(name, resolveUrl(href), thumb))
-                    }
-                }
-            }
-            if (actors.isNotEmpty()) return actors
+            return actors.distinctBy { it.url }
         }
-        return emptyList()
+
+        for (link in doc.select("a.card-link[href*=/models/]")) {
+            val href = resolveUrl(link.attr("href"))
+            val img = link.selectFirst("img.model-image, img")
+            val name = link.selectFirst("h3.card-title")?.text()?.trim()
+                ?: img?.attr("alt")?.substringBefore(" Borntobefuck")?.trim()
+                ?: img?.attr("alt")?.trim()
+                ?: link.text().trim()
+            if (name.isEmpty()) continue
+            val thumb = img?.let { getImgSrc(it) } ?: ""
+            actors.add(ActorItem(name, href, thumb))
+        }
+        return actors.distinctBy { it.url }
     }
 
     override suspend fun getTags(): List<TagItem> {
-        val urls = listOf("${baseUrl}tags/", "${baseUrl}tag/", "${baseUrl}categories/tags/")
-        for (url in urls) {
-            val doc = fetchDocument(url) ?: continue
-            val tags = mutableListOf<TagItem>()
-
-            val selectors = listOf(
-                ".tag-list a", ".tags a", ".tag-cloud a",
-                "a[href*=tag]", ".category-list a"
-            )
-
-            for (selector in selectors) {
-                val elements = doc.select(selector)
-                if (elements.size >= 3) {
-                    for (el in elements) {
-                        val name = el.text().trim()
-                        val href = resolveUrl(el.attr("href"))
-                        val count = el.selectFirst(".count, .num, span.badge")?.text()?.trim() ?: ""
-                        if (name.isNotEmpty() && href.isNotEmpty()) {
-                            tags.add(TagItem(name, href, count))
-                        }
-                    }
-                    return tags.distinctBy { it.name }
-                }
+        val doc = fetchDocument("${baseRoot}/tags") ?: return emptyList()
+        val tags = mutableListOf<TagItem>()
+        for (el in doc.select("a.active-video-tag[href*=/tags/]")) {
+            val name = el.text().trim().removePrefix("#").trim()
+            val href = resolveUrl(el.attr("href"))
+            if (name.isNotEmpty() && href.isNotEmpty()) {
+                tags.add(TagItem(name, href))
             }
         }
-        return emptyList()
+        return tags.distinctBy { it.url }
     }
 
     override suspend fun getCategories(): List<CategoryItem> {
-        val doc = fetchDocument("${baseUrl}categories/") ?: return emptyList()
+        val doc = fetchDocument("${baseRoot}/kategorien") ?: return emptyList()
         val categories = mutableListOf<CategoryItem>()
-
-        // Versuche verschiedene Selektoren für Kategorien
-        val categorySelectors = listOf(
-            ".category-list a", ".categories a", ".category-item a",
-            ".cat-item a", "a[href*=category]", "a[href*=categories]",
-            ".tag-list a", ".tags a"
-        )
-
-        for (selector in categorySelectors) {
-            val elements = doc.select(selector)
-            if (elements.isNotEmpty()) {
-                for (el in elements) {
-                    val name = el.text().trim()
-                    val url = resolveUrl(el.attr("href"))
-                    val thumb = el.selectFirst("img")?.let { getImgSrc(it) } ?: ""
-                    val count = el.selectFirst(".count, .num, span")?.text()?.trim() ?: ""
-                    if (name.isNotEmpty() && url.isNotEmpty()) {
-                        categories.add(CategoryItem(name, url, thumb, count))
-                    }
-                }
-                break
+        for (card in doc.select("li.card.category")) {
+            val link = card.selectFirst("a.card-link[href]") ?: continue
+            val name = card.selectFirst("h3.card-title")?.text()?.trim()
+                ?: link.text().trim()
+            val url = resolveUrl(link.attr("href"))
+            val thumb = link.selectFirst("img")?.let { getImgSrc(it) } ?: ""
+            if (name.isNotEmpty() && url.isNotEmpty()) {
+                categories.add(CategoryItem(name, url, thumb))
             }
         }
-
         return categories
     }
 
@@ -169,7 +143,6 @@ class BtbfScraper : SiteScraper {
         val doc = fetchDocument(pageUrl) ?: return null
         val sources = mutableListOf<VideoSource>()
 
-        // 1. <video> Tags suchen
         doc.select("video source").forEach { source ->
             val src = source.attr("src")
             if (src.isNotEmpty()) {
@@ -187,7 +160,6 @@ class BtbfScraper : SiteScraper {
             }
         }
 
-        // Video src direkt
         doc.selectFirst("video")?.let { video ->
             val src = video.attr("src")
             if (src.isNotEmpty() && !src.startsWith("blob:")) {
@@ -200,11 +172,8 @@ class BtbfScraper : SiteScraper {
             }
         }
 
-        // 2. JavaScript nach Video-URLs durchsuchen
         doc.select("script").forEach { script ->
             val text = script.data()
-
-            // HLS URLs
             val hlsPattern = Regex("""https?://[^\s'"<>]+\.m3u8[^\s'"<>]*""")
             hlsPattern.findAll(text).forEach { match ->
                 val url = match.value.replace("\\", "")
@@ -212,8 +181,6 @@ class BtbfScraper : SiteScraper {
                     sources.add(VideoSource(url, "", VideoSourceType.HLS))
                 }
             }
-
-            // MP4 URLs
             val mp4Pattern = Regex("""https?://[^\s'"<>]+\.mp4[^\s'"<>]*""")
             mp4Pattern.findAll(text).forEach { match ->
                 val url = match.value.replace("\\", "")
@@ -221,8 +188,6 @@ class BtbfScraper : SiteScraper {
                     sources.add(VideoSource(url, "", VideoSourceType.DIRECT))
                 }
             }
-
-            // Gängige JS-Patterns für Video-Player
             val playerPatterns = listOf(
                 Regex("""(?:file|src|source|video_url|videoUrl|stream_url)\s*[:=]\s*['"](https?://[^'"]+)['"]\s*"""),
                 Regex("""(?:file|src|source)\s*:\s*['"](https?://[^'"]+\.(?:mp4|m3u8|webm))['"]\s*"""),
@@ -243,7 +208,6 @@ class BtbfScraper : SiteScraper {
             }
         }
 
-        // 3. data-Attribute
         doc.select("[data-src], [data-video], [data-hls], [data-stream]").forEach { el ->
             listOf("data-src", "data-video", "data-hls", "data-stream").forEach { attr ->
                 val value = el.attr(attr)
@@ -261,7 +225,6 @@ class BtbfScraper : SiteScraper {
             }
         }
 
-        // 4. og:video Meta-Tag
         doc.selectFirst("meta[property=og:video]")?.attr("content")?.let { src ->
             if (src.isNotEmpty() && sources.none { it.url == src }) {
                 val type = when {
@@ -282,37 +245,23 @@ class BtbfScraper : SiteScraper {
         val description = doc.selectFirst("meta[property=og:description]")?.attr("content")
             ?: doc.selectFirst(".description, .video-description")?.text() ?: ""
 
-        val tags = doc.select(".tags a, .tag-list a, a[href*=tag], a[href*=category]")
-            .map { it.text().trim() }
+        val tags = doc.select("a.active-video-tag, .tags a, a[href*=/tags/]")
+            .map { it.text().trim().removePrefix("#").trim() }
             .filter { it.isNotEmpty() }
             .distinct()
 
-        // Darsteller/Models extrahieren
         val actors = mutableListOf<ActorItem>()
-        val actorSelectors = listOf(
-            ".model-list a", ".models a", ".pornstar-list a",
-            ".actor-list a", "a[href*=model]", "a[href*=actor]",
-            "a[href*=pornstar]", "a[href*=girl]", ".video-info a[href*=model]"
-        )
-        for (selector in actorSelectors) {
-            val elements = doc.select(selector)
-            if (elements.isNotEmpty()) {
-                for (el in elements) {
-                    val name = el.text().trim()
-                    val href = resolveUrl(el.attr("href"))
-                    val thumb = el.selectFirst("img")?.let { getImgSrc(it) } ?: ""
-                    if (name.isNotEmpty()) {
-                        actors.add(ActorItem(name, href, thumb))
-                    }
-                }
-                break
-            }
+        for (link in doc.select("a[href*=/models/].channel_avatar_video_card, a.profil[href*=/models/], .bottom a[href*=/models/]")) {
+            val name = link.selectFirst("img")?.attr("alt")?.substringBefore(" Borntobefuck")?.trim()
+                ?: link.selectFirst(".video-channel")?.text()?.trim()
+                ?: continue
+            val href = resolveUrl(link.attr("href"))
+            val thumb = link.selectFirst("img.avatar, img")?.let { getImgSrc(it) } ?: ""
+            if (name.isNotEmpty()) actors.add(ActorItem(name, href, thumb))
         }
 
-        // Related Videos
-        val relatedVideos = parseVideoItems(doc, ".related-videos, .related, .similar")
+        val relatedVideos = parseRelatedVideosOnDetailPage(doc)
 
-        // HLS bevorzugen, dann nach Qualität sortieren
         val sortedSources = sources.sortedWith(compareBy<VideoSource> {
             when (it.type) {
                 VideoSourceType.HLS -> 0
@@ -327,44 +276,48 @@ class BtbfScraper : SiteScraper {
             thumbnailUrl = thumbnail,
             description = description,
             tags = tags,
-            actors = actors,
+            actors = actors.distinctBy { it.url },
             relatedVideos = relatedVideos
         )
+    }
+
+    private fun parseRelatedVideosOnDetailPage(doc: Document): List<VideoItem> {
+        val videos = mutableListOf<VideoItem>()
+        val blocks = doc.select(".few-videos .chunk-videos > .video")
+        for (item in blocks) {
+            parseVideoFromElement(item)?.let { videos.add(it) }
+        }
+        return videos.distinctBy { it.pageUrl }
     }
 
     private fun parseVideoList(doc: Document, currentUrl: String): PaginatedResult {
         val videos = mutableListOf<VideoItem>()
 
-        // Versuche verschiedene gängige Selektoren für Video-Grids
         val containerSelectors = listOf(
+            ".chunk-videos > .video",
+            ".chunk-videos .video.ranked",
+            ".chunk-videos .video",
+            ".home-chunk-videos .video",
             ".videos-list .video-item",
             ".video-list .video-item",
             ".thumbs .thumb",
-            ".thumb-list .thumb",
-            ".video-listing .video-thumb",
             ".list-videos .item",
             ".videos .video",
             ".video-block",
             ".video-card",
-            ".mozaique .thumb-block",
-            ".well .well-sm",
-            ".col-sm-6, .col-md-4, .col-lg-3",
-            "article.post",
-            ".post-item",
-            ".content-item"
+            ".mozaique .thumb-block"
         )
 
         for (selector in containerSelectors) {
             val items = doc.select(selector)
-            if (items.size >= 2) {
+            if (items.size >= 1) {
                 for (item in items) {
                     parseVideoFromElement(item)?.let { videos.add(it) }
                 }
-                break
+                if (videos.isNotEmpty()) break
             }
         }
 
-        // Fallback: Alle Links mit Thumbnails suchen
         if (videos.isEmpty()) {
             val allLinks = doc.select("a[href]")
             for (link in allLinks) {
@@ -372,22 +325,18 @@ class BtbfScraper : SiteScraper {
                 val href = link.attr("href")
                 val imgSrc = getImgSrc(img)
                 if (imgSrc.isEmpty()) continue
-
-                // Nur Links die wie Video-Seiten aussehen
-                if (href.contains("/video/") || href.contains("/watch/") ||
-                    href.contains("/v/") || href.matches(Regex(""".+/[a-z0-9-]+/?$"""))
+                if (href.contains("/videos/") || href.contains("/video/") || href.contains("/watch/") ||
+                    href.contains("/v/")
                 ) {
                     val title = img.attr("alt").ifEmpty {
-                        link.attr("title").ifEmpty {
-                            link.text().trim()
-                        }
+                        link.attr("title").ifEmpty { link.text().trim() }
                     }
                     if (title.isNotEmpty() && imgSrc.contains("http")) {
                         val url = resolveUrl(href)
                         val duration = link.selectFirst(".duration, .time, .length, .video-duration")?.text()?.trim() ?: ""
                         videos.add(
                             VideoItem(
-                                id = url.hashCode().toString(),
+                                id = url,
                                 title = title,
                                 thumbnailUrl = imgSrc,
                                 pageUrl = url,
@@ -399,62 +348,76 @@ class BtbfScraper : SiteScraper {
             }
         }
 
-        // Pagination erkennen
-        val nextPage = doc.selectFirst(
-            "a.next, a[rel=next], .pagination .next a, .pagination a:contains(Next), " +
-            ".pagination a:contains(next), .pagination a:contains(»), li.next a"
-        )
-        val hasNext = nextPage != null
-        val nextUrl = nextPage?.attr("href")?.let { resolveUrl(it) }
+        val distinct = videos.distinctBy { it.pageUrl }
+        val loadMore = doc.selectFirst("#load-more, button.load-btn")
+        val hasNext = loadMore != null && distinct.isNotEmpty()
+        val nextUrl = if (hasNext) bumpPageQuery(currentUrl) else null
 
-        // Aktuelle Seite erkennen
-        val currentPage = doc.selectFirst(".pagination .active, .pagination .current")
-            ?.text()?.trim()?.toIntOrNull() ?: 1
+        val currentPage = Regex("""[?&]page=(\d+)""").find(currentUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
 
         return PaginatedResult(
-            videos = videos.distinctBy { it.pageUrl },
+            videos = distinct,
             hasNextPage = hasNext,
             nextPageUrl = nextUrl,
             currentPage = currentPage
         )
     }
 
+    private fun bumpPageQuery(url: String): String {
+        val regex = Regex("""([?&])page=\d+""")
+        return when {
+            regex.containsMatchIn(url) -> regex.replace(url) { m ->
+                val sep = m.groupValues[1]
+                val next = Regex("""page=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()?.plus(1) ?: 2
+                "${sep}page=$next"
+            }
+            url.contains("?") -> "$url&page=2"
+            else -> "$url?page=2"
+        }
+    }
+
     private fun parseVideoFromElement(element: Element): VideoItem? {
-        // Link finden
-        val link = element.selectFirst("a[href]") ?: return null
+        val link = element.selectFirst("a.cardVideo-top-link[href], a[href*=/videos/]")
+            ?: element.selectFirst("a[href]")
+            ?: return null
         val href = resolveUrl(link.attr("href"))
-        if (href.isEmpty() || href == baseUrl) return null
+        if (href.isEmpty() || (!href.contains("/videos/") && !href.contains("/video/"))) return null
+        if (href == baseUrl || href == baseRoot) return null
 
-        // Thumbnail
-        val img = element.selectFirst("img")
-        val thumbUrl = if (img != null) getImgSrc(img) else ""
+        val img = element.selectFirst("img.thumbnail, img")
+        val thumbUrl = img?.let { getImgSrc(it) } ?: ""
 
-        // Title
-        val title = element.selectFirst(".title, .video-title, h3, h4, .name")?.text()?.trim()
+        val title = element.selectFirst("h3.video-title")?.text()?.trim()
+            ?: img?.attr("alt")?.substringBefore(" Borntobefuck")?.trim()
             ?: img?.attr("alt")?.trim()
             ?: link.attr("title").trim()
             ?: link.text().trim()
 
         if (title.isEmpty()) return null
 
-        // Duration
-        val duration = element.selectFirst(".duration, .time, .length, .video-duration, .thumb-duration")
-            ?.text()?.trim() ?: ""
+        val duration = element.selectFirst("div.time[data-duration], .time[data-duration]")
+            ?.attr("data-duration")
+            ?.toLongOrNull()
+            ?.let { formatDurationSeconds(it) }
+            ?: element.selectFirst(".duration, .time, .length, .video-duration, .thumb-duration")
+                ?.text()?.trim() ?: ""
 
-        // Views
-        val views = element.selectFirst(".views, .video-views, .view-count")
-            ?.text()?.trim() ?: ""
+        val views = element.selectFirst("p.views[data-views]")
+            ?.attr("data-views")?.trim()
+            ?: element.selectFirst(".views, .video-views, .view-count")?.text()?.trim() ?: ""
 
-        // Quality
         val quality = element.selectFirst(".quality, .hd, .video-quality")
             ?.text()?.trim() ?: ""
 
-        // Date
-        val date = element.selectFirst(".date, .added, .video-date, time")
-            ?.text()?.trim() ?: ""
+        val date = element.selectFirst("p.date[data-published]")
+            ?.attr("data-published")
+            ?.toLongOrNull()
+            ?.let { formatEpochDay(it) }
+            ?: element.selectFirst(".date, .added, .video-date, time")
+                ?.text()?.trim() ?: ""
 
         return VideoItem(
-            id = href.hashCode().toString(),
+            id = href,
             title = title,
             thumbnailUrl = thumbUrl,
             pageUrl = href,
@@ -465,24 +428,22 @@ class BtbfScraper : SiteScraper {
         )
     }
 
-    private fun parseVideoItems(doc: Document, containerSelector: String): List<VideoItem> {
-        val videos = mutableListOf<VideoItem>()
-        doc.select(containerSelector).firstOrNull()?.let { container ->
-            container.select("a[href]").forEach { link ->
-                val img = link.selectFirst("img") ?: return@forEach
-                val href = resolveUrl(link.attr("href"))
-                val title = img.attr("alt").ifEmpty { link.text().trim() }
-                val thumb = getImgSrc(img)
-                if (title.isNotEmpty() && thumb.isNotEmpty()) {
-                    videos.add(VideoItem(href.hashCode().toString(), title, thumb, href))
-                }
-            }
+    private fun formatDurationSeconds(total: Long): String {
+        if (total <= 0) return ""
+        val m = TimeUnit.SECONDS.toMinutes(total)
+        val s = total - TimeUnit.MINUTES.toSeconds(m)
+        return String.format("%d:%02d", m, s)
+    }
+
+    private fun formatEpochDay(epochSeconds: Long): String {
+        return try {
+            SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(Date(epochSeconds * 1000))
+        } catch (_: Exception) {
+            ""
         }
-        return videos
     }
 
     private fun getImgSrc(img: Element): String {
-        // Verschiedene lazy-loading Patterns
         return img.attr("data-src").ifEmpty {
             img.attr("data-lazy-src").ifEmpty {
                 img.attr("data-original").ifEmpty {
@@ -498,7 +459,7 @@ class BtbfScraper : SiteScraper {
         if (url.isEmpty()) return ""
         if (url.startsWith("http://") || url.startsWith("https://")) return url
         if (url.startsWith("//")) return "https:$url"
-        if (url.startsWith("/")) return baseUrl.trimEnd('/') + url
-        return baseUrl.trimEnd('/') + "/" + url
+        if (url.startsWith("/")) return baseRoot + url
+        return "$baseRoot/$url"
     }
 }

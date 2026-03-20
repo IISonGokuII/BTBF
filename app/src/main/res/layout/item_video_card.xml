@@ -56,7 +56,7 @@
             android:layout_height="wrap_content"
             android:layout_gravity="top|end"
             android:layout_margin="6dp"
-            android:background="#CCE50914"
+            android:background="@color/badge_overlay"
             android:paddingStart="4dp"
             android:paddingEnd="4dp"
             android:paddingTop="1dp"

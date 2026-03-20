@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorPrimary">#E50914</color>
-    <color name="colorPrimaryDark">#B20710</color>
-    <color name="colorAccent">#E50914</color>
+    <!-- BTBF / Site accent (Orange wie borntobefuck Theme) -->
+    <color name="colorPrimary">#E85D04</color>
+    <color name="colorPrimaryDark">#B84703</color>
+    <color name="colorAccent">#FF8F3C</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
@@ -20,4 +21,7 @@
     <color name="btn_focused_bg">#33E50914</color>
     <color name="divider">#1AFFFFFF</color>
     <color name="splash_bg">#FF0A0A0A</color>
+    <color name="chip_stroke">#55E85D04</color>
+    <color name="ripple_light">#33FFFFFF</color>
+    <color name="badge_overlay">#CCE85D04</color>
 </resources>

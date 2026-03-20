@@ -11,7 +11,9 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.btbf.app.databinding.ActivityBrowseBinding
 import com.btbf.app.scraper.*
@@ -67,7 +69,6 @@ class BrowseActivity : AppCompatActivity() {
         val siteName = intent.getStringExtra(EXTRA_SITE_NAME) ?: "BTBF"
         siteUrl = intent.getStringExtra(EXTRA_SITE_URL) ?: "https://de.borntobefuck.com/"
 
-        binding.tvSiteName.text = siteName
         favoritesManager = FavoritesManager(this)
         videoDownloadHelper = VideoDownloadHelper(this)
 
@@ -77,9 +78,20 @@ class BrowseActivity : AppCompatActivity() {
             GenericScraper(siteName, siteUrl)
         }
 
+        binding.toolbar.title = siteName
+        binding.toolbar.subtitle = try {
+            android.net.Uri.parse(siteUrl).host
+        } catch (_: Exception) {
+            null
+        }
+        binding.toolbar.setNavigationOnClickListener { finish() }
+        binding.toolbar.navigationIcon?.setTint(
+            ContextCompat.getColor(this, R.color.text_primary)
+        )
+
         setupAdapters()
         setupGrid()
-        setupChips()
+        setupBrowseChips()
         setupSearch()
         loadHomePage()
     }
@@ -122,19 +134,42 @@ class BrowseActivity : AppCompatActivity() {
         })
 
         binding.btnRetry.setOnClickListener { loadHomePage() }
-        binding.chipHome.requestFocus()
+        binding.rvBrowseChips.post {
+            binding.rvBrowseChips.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus()
+        }
     }
 
-    private fun setupChips() {
-        binding.chipHome.setOnClickListener { switchToVideoMode(); loadHomePage() }
-        binding.chipNew.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.NEWEST) }
-        binding.chipTop.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.TOP) }
-        binding.chipRandom.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.RANDOM) }
-        binding.chipLongest.setOnClickListener { switchToVideoMode(); loadSorted(SortOrder.LONGEST) }
-        binding.chipCategories.setOnClickListener { showCategoriesGrid() }
-        binding.chipActors.setOnClickListener { showActorsGrid() }
-        binding.chipTags.setOnClickListener { showTagsDialog() }
-        binding.chipFavorites.setOnClickListener { showFavorites() }
+    private fun setupBrowseChips() {
+        binding.rvBrowseChips.layoutManager =
+            LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        binding.rvBrowseChips.adapter = BrowseChipAdapter { action ->
+            when (action) {
+                BrowseNavAction.HOME -> {
+                    switchToVideoMode()
+                    loadHomePage()
+                }
+                BrowseNavAction.NEWEST -> {
+                    switchToVideoMode()
+                    loadSorted(SortOrder.NEWEST)
+                }
+                BrowseNavAction.TOP -> {
+                    switchToVideoMode()
+                    loadSorted(SortOrder.TOP)
+                }
+                BrowseNavAction.RANDOM -> {
+                    switchToVideoMode()
+                    loadSorted(SortOrder.RANDOM)
+                }
+                BrowseNavAction.LONGEST -> {
+                    switchToVideoMode()
+                    loadSorted(SortOrder.LONGEST)
+                }
+                BrowseNavAction.CATEGORIES -> showCategoriesGrid()
+                BrowseNavAction.ACTORS -> showActorsGrid()
+                BrowseNavAction.TAGS -> showTagsDialog()
+                BrowseNavAction.FAVORITES -> showFavorites()
+            }
+        }
     }
 
     private fun setupSearch() {
@@ -234,7 +269,7 @@ class BrowseActivity : AppCompatActivity() {
                 id = fav.id,
                 title = fav.title,
                 thumbnailUrl = fav.thumbnailUrl,
-                pageUrl = fav.id, // Wird als Page-URL gespeichert
+                pageUrl = fav.id,
                 duration = fav.duration
             )
         }
@@ -435,7 +470,7 @@ class BrowseActivity : AppCompatActivity() {
     }
 
     private fun saveToFavorites(video: VideoItem) {
-        favoritesManager.addFavoriteVideo(video.id, video.title, video.thumbnailUrl, video.duration)
+        favoritesManager.addFavoriteVideo(video.pageUrl, video.title, video.thumbnailUrl, video.duration)
         Toast.makeText(this, "Favorit gespeichert!", Toast.LENGTH_SHORT).show()
     }
 

@@ -1,4 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BTBF</string>
+
+    <string name="site_picker_title">Quelle wählen</string>
+    <string name="site_picker_subtitle">Videos durchsuchen und abspielen</string>
+
+    <string name="site_btbf_sub">Born To Be Fuck · DE</string>
+    <string name="site_camcaps_sub">Premium Cams Content</string>
+    <string name="site_fyxxr_sub">German Amateur</string>
+    <string name="site_sheesh_sub">Clips &amp; Leaks</string>
+    <string name="site_leakporner_sub">OnlyFans Leaks</string>
+
+    <string name="browse_title_format">%1$s</string>
+    <string name="search_hint">Suchen…</string>
+    <string name="empty_videos">Keine Inhalte gefunden</string>
+    <string name="retry">Erneut versuchen</string>
+    <string name="loading">Wird geladen…</string>
+
+    <string name="chip_home">Start</string>
+    <string name="chip_new">Neu</string>
+    <string name="chip_top">Top</string>
+    <string name="chip_random">Zufall</string>
+    <string name="chip_longest">Längste</string>
+    <string name="chip_categories">Kategorien</string>
+    <string name="chip_actors">Models</string>
+    <string name="chip_tags">Tags</string>
+    <string name="chip_favorites">Favoriten</string>
+
+    <string name="nav_back">Zurück</string>
 </resources>

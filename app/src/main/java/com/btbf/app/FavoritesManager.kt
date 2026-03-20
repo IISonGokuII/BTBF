@@ -25,23 +25,28 @@ class FavoritesManager(context: Context) {
     // ==================== VIDEO FAVORITEN ====================
     
     /**
-     * Video zu Favoriten hinzufügen
+     * Video zu Favoriten hinzufügen. [pageUrl] ist die kanonische Seiten-URL des Videos (gleicher Wert wie [VideoItem.pageUrl]).
      */
-    fun addFavoriteVideo(videoId: String, title: String, thumbnailUrl: String, duration: String = "") {
+    fun addFavoriteVideo(pageUrl: String, title: String, thumbnailUrl: String, duration: String = "") {
+        val key = normalizeVideoUrl(pageUrl)
+        if (key.isEmpty()) return
         val videos = getFavoriteVideos().toMutableList()
-        
-        // Prüfen ob schon vorhanden
-        if (videos.none { it.id == videoId }) {
-            videos.add(FavoriteVideo(videoId, title, thumbnailUrl, duration, System.currentTimeMillis()))
+        if (videos.none { normalizeVideoUrl(it.id) == key }) {
+            videos.add(FavoriteVideo(key, title, thumbnailUrl, duration, System.currentTimeMillis()))
             saveFavoriteVideos(videos)
         }
+    }
+
+    private fun normalizeVideoUrl(url: String): String {
+        return url.trim().trimEnd('/')
     }
     
     /**
      * Video aus Favoriten entfernen
      */
-    fun removeFavoriteVideo(videoId: String) {
-        val videos = getFavoriteVideos().filter { it.id != videoId }
+    fun removeFavoriteVideo(pageUrl: String) {
+        val key = normalizeVideoUrl(pageUrl)
+        val videos = getFavoriteVideos().filter { normalizeVideoUrl(it.id) != key }
         saveFavoriteVideos(videos)
     }
     
@@ -72,8 +77,9 @@ class FavoritesManager(context: Context) {
     /**
      * Prüfen ob Video Favorit ist
      */
-    fun isVideoFavorite(videoId: String): Boolean {
-        return getFavoriteVideos().any { it.id == videoId }
+    fun isVideoFavorite(pageUrl: String): Boolean {
+        val key = normalizeVideoUrl(pageUrl)
+        return getFavoriteVideos().any { normalizeVideoUrl(it.id) == key }
     }
     
     private fun saveFavoriteVideos(videos: List<FavoriteVideo>) {
