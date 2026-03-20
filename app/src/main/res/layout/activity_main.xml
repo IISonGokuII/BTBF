@@ -514,6 +514,13 @@
             android:text="Menu: Optionen"
             android:textColor="@color/text_secondary"
             android:textSize="11sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Leiste: Maus fuer kleine Klicks"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
     </LinearLayout>
 
 </FrameLayout>
