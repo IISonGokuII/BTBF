@@ -72,11 +72,12 @@ class BrowseActivity : AppCompatActivity() {
         favoritesManager = FavoritesManager(this)
         videoDownloadHelper = VideoDownloadHelper(this)
 
-        scraper = if (siteName == "BTBF") {
+        val innerScraper: SiteScraper = if (siteName == "BTBF") {
             BtbfScraper()
         } else {
             GenericScraper(siteName, siteUrl)
         }
+        scraper = HybridSiteScraper(this, innerScraper)
 
         binding.toolbar.title = siteName
         binding.toolbar.subtitle = try {
@@ -439,14 +440,26 @@ class BrowseActivity : AppCompatActivity() {
         CoroutineScope(Dispatchers.Main).launch {
             val detail = scraper.getVideoDetail(video.pageUrl)
             if (detail != null && detail.videoSources.isNotEmpty()) {
-                val source = detail.videoSources.first()
+                val source = detail.videoSources.firstOrNull { s ->
+                    s.type != VideoSourceType.DASH && !videoDownloadHelper.isDashUrl(s.url)
+                } ?: detail.videoSources.first()
+
+                if (source.type == VideoSourceType.DASH || videoDownloadHelper.isDashUrl(source.url)) {
+                    AlertDialog.Builder(this@BrowseActivity)
+                        .setTitle(R.string.dash_download_title)
+                        .setMessage(R.string.dash_download_message)
+                        .setPositiveButton(R.string.ok, null)
+                        .show()
+                    return@launch
+                }
+
                 when (source.type) {
                     VideoSourceType.HLS -> {
                         Toast.makeText(this@BrowseActivity, "HLS Download gestartet...", Toast.LENGTH_SHORT).show()
                         videoDownloadHelper.downloadHlsStream(
                             m3u8Url = source.url,
                             referer = video.pageUrl,
-                            userAgent = null,
+                            userAgent = WebViewListingExtractor.DEFAULT_USER_AGENT,
                             onProgress = { progress, message ->
                                 if (progress % 20 == 0) {
                                     Toast.makeText(this@BrowseActivity, "$message ($progress%)", Toast.LENGTH_SHORT).show()
@@ -459,7 +472,11 @@ class BrowseActivity : AppCompatActivity() {
                         )
                     }
                     else -> {
-                        videoDownloadHelper.downloadDirect(source.url, video.pageUrl, null)
+                        videoDownloadHelper.downloadDirect(
+                            source.url,
+                            video.pageUrl,
+                            WebViewListingExtractor.DEFAULT_USER_AGENT
+                        )
                         Toast.makeText(this@BrowseActivity, "Download gestartet!", Toast.LENGTH_SHORT).show()
                     }
                 }

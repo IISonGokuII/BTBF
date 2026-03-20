@@ -19,6 +19,9 @@ import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class VideoDownloadHelper(private val context: Context) {
 
@@ -62,6 +65,12 @@ class VideoDownloadHelper(private val context: Context) {
     }
 
     fun isAnyVideoUrl(url: String): Boolean = isDirectVideoUrl(url) || isStreamUrl(url)
+
+    /** MPEG-DASH (.mpd) – nicht als eine Datei per DownloadManager/HLS-Logik speicherbar. */
+    fun isDashUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains(".mpd") || lower.contains("type=application/dash+xml")
+    }
 
     fun downloadDirect(url: String, referer: String?, userAgent: String?, contentDisposition: String? = null, mimeType: String? = null) {
         val fileName = if (contentDisposition != null) {
@@ -117,10 +126,18 @@ class VideoDownloadHelper(private val context: Context) {
                     masterContent
                 }
 
-                // 3. Segmente extrahieren
-                val segments = parseSegments(segmentContent, segmentPlaylistUrl)
-                if (segments.isEmpty()) {
-                    // Vielleicht ist es eine direkte MP4-URL in der Playlist
+                // 3. Segmente extrahieren (inkl. AES-128 / EXT-X-KEY)
+                val parseResult = parseHlsMediaPlaylist(segmentContent, segmentPlaylistUrl, referer, ua, cookie)
+                val segmentEntries = when (parseResult) {
+                    is HlsParseResult.Unsupported -> {
+                        showErrorNotification(parseResult.reason)
+                        withContext(Dispatchers.Main) { onComplete(null) }
+                        return@withContext
+                    }
+                    is HlsParseResult.Ok -> parseResult.segments
+                }
+
+                if (segmentEntries.isEmpty()) {
                     val directUrl = findDirectUrlInPlaylist(masterContent, m3u8Url)
                     if (directUrl != null) {
                         withContext(Dispatchers.Main) {
@@ -133,9 +150,9 @@ class VideoDownloadHelper(private val context: Context) {
                     return@withContext
                 }
 
-                onProgress(10, "${segments.size} Segmente gefunden")
+                onProgress(10, "${segmentEntries.size} Segmente gefunden")
 
-                // 4. Segmente herunterladen und zusammenfuegen
+                // 4. Segmente herunterladen, ggf. AES-128-CBC entschluesseln, zusammenfuegen
                 val outputFile = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                     "BTBF_${System.currentTimeMillis()}.ts"
@@ -143,19 +160,34 @@ class VideoDownloadHelper(private val context: Context) {
                 val fos = FileOutputStream(outputFile)
                 var downloadedCount = 0
 
-                showProgressNotification(0, segments.size)
+                showProgressNotification(0, segmentEntries.size)
 
-                for ((index, segUrl) in segments.withIndex()) {
-                    val segData = fetchUrlBytes(segUrl, referer, ua, cookie)
+                for ((index, entry) in segmentEntries.withIndex()) {
+                    val raw = fetchUrlBytes(entry.url, referer, ua, cookie)
+                    val segData = when {
+                        raw == null -> null
+                        entry.decryptKey != null && entry.decryptIv != null -> {
+                            val plain = decryptAes128Cbc(raw, entry.decryptKey, entry.decryptIv)
+                            if (plain == null) {
+                                showErrorNotification("AES-Entschlüsselung Segment ${index + 1} fehlgeschlagen")
+                                fos.close()
+                                outputFile.delete()
+                                withContext(Dispatchers.Main) { onComplete(null) }
+                                return@withContext
+                            }
+                            plain
+                        }
+                        else -> raw
+                    }
                     if (segData != null) {
                         fos.write(segData)
                         downloadedCount++
                     }
 
-                    val progress = 10 + ((index + 1) * 90 / segments.size)
-                    val msg = "Segment ${index + 1}/${segments.size}"
+                    val progress = 10 + ((index + 1) * 90 / segmentEntries.size)
+                    val msg = "Segment ${index + 1}/${segmentEntries.size}"
                     withContext(Dispatchers.Main) { onProgress(progress, msg) }
-                    showProgressNotification(index + 1, segments.size)
+                    showProgressNotification(index + 1, segmentEntries.size)
                 }
 
                 fos.flush()
@@ -202,15 +234,150 @@ class VideoDownloadHelper(private val context: Context) {
         return resolveUrl(url, baseUrl)
     }
 
-    private fun parseSegments(content: String, baseUrl: String): List<String> {
-        val segments = mutableListOf<String>()
-        for (line in content.lines()) {
-            val trimmed = line.trim()
-            if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
-                segments.add(resolveUrl(trimmed, baseUrl))
+    private sealed class HlsParseResult {
+        data class Ok(val segments: List<HlsSegmentEntry>) : HlsParseResult()
+        data class Unsupported(val reason: String) : HlsParseResult()
+    }
+
+    private data class HlsSegmentEntry(
+        val url: String,
+        val decryptKey: ByteArray?,
+        val decryptIv: ByteArray?
+    )
+
+    /**
+     * Parst eine Media-Playlist inkl. [#EXT-X-KEY](METHOD=AES-128) und IV/Media-Sequence.
+     */
+    private fun parseHlsMediaPlaylist(
+        content: String,
+        baseUrl: String,
+        referer: String?,
+        userAgent: String,
+        cookie: String?
+    ): HlsParseResult {
+        var mediaSeq = 0L
+        var currentKey: ByteArray? = null
+        var currentIvExplicit: ByteArray? = null
+
+        val segments = mutableListOf<HlsSegmentEntry>()
+
+        for (rawLine in content.lines()) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+
+            if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+                val num = line.substringAfter(":").trim().substringBefore(",").toLongOrNull() ?: 0L
+                mediaSeq = num
+                continue
             }
+
+            if (line.startsWith("#EXT-X-KEY:")) {
+                val method = extractHlsMethod(line)?.uppercase() ?: "NONE"
+                when {
+                    method == "NONE" || method.isEmpty() -> {
+                        currentKey = null
+                        currentIvExplicit = null
+                    }
+                    method == "AES-128" -> {
+                        val keyUri = extractKeyUriFromLine(line)
+                            ?: return HlsParseResult.Unsupported("EXT-X-KEY ohne URI")
+                        val keyUrl = resolveUrl(keyUri, baseUrl)
+                        val keyRaw = fetchUrlBytes(keyUrl, referer, userAgent, cookie)
+                            ?: return HlsParseResult.Unsupported("AES-Schlüssel nicht ladbar")
+                        currentKey = normalizeAesKeyMaterial(keyRaw)
+                            ?: return HlsParseResult.Unsupported("Ungültiger AES-128-Schlüssel")
+                        currentIvExplicit = extractIvFromKeyLine(line)
+                    }
+                    method.contains("SAMPLE") -> {
+                        return HlsParseResult.Unsupported("SAMPLE-AES wird nicht unterstützt")
+                    }
+                    else -> {
+                        return HlsParseResult.Unsupported("Verschlüsselung $method nicht unterstützt")
+                    }
+                }
+                continue
+            }
+
+            if (line.startsWith("#")) continue
+
+            val segUrl = resolveUrl(line, baseUrl)
+            val iv = if (currentKey != null) {
+                currentIvExplicit ?: mediaSequenceToIv(mediaSeq)
+            } else {
+                null
+            }
+            segments.add(HlsSegmentEntry(segUrl, currentKey, iv))
+            mediaSeq++
         }
-        return segments
+
+        return HlsParseResult.Ok(segments)
+    }
+
+    private fun extractHlsMethod(line: String): String? {
+        val m = Regex("""METHOD=([^,\s"]+)""", RegexOption.IGNORE_CASE).find(line)
+        return m?.groupValues?.get(1)?.trim()
+    }
+
+    private fun extractKeyUriFromLine(line: String): String? {
+        Regex("""URI="([^"]+)"""").find(line)?.let { return it.groupValues[1] }
+        Regex("""URI='([^']+)'""").find(line)?.let { return it.groupValues[1] }
+        val m = Regex("""URI=([^,\s]+)""").find(line) ?: return null
+        return m.groupValues[1].trim().trim('"')
+    }
+
+    private fun extractIvFromKeyLine(line: String): ByteArray? {
+        Regex("""IV=0x([0-9a-fA-F]+)""").find(line)?.let {
+            hexToBytesEven(it.groupValues[1])?.let { b -> return b }
+        }
+        Regex("""IV=([0-9a-fA-F]{32})""").find(line)?.let {
+            return hexToBytesEven(it.groupValues[1])
+        }
+        return null
+    }
+
+    private fun hexToBytesEven(hex: String): ByteArray? {
+        val h = hex.trim()
+        if (h.length % 2 != 0) return null
+        return try {
+            ByteArray(h.length / 2) { i ->
+                h.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun mediaSequenceToIv(seq: Long): ByteArray {
+        val b = ByteArray(16)
+        var x = seq
+        for (i in 15 downTo 0) {
+            b[i] = (x and 0xffL).toByte()
+            x = x ushr 8
+        }
+        return b
+    }
+
+    private fun normalizeAesKeyMaterial(raw: ByteArray): ByteArray? {
+        if (raw.size == 16) return raw
+        val asText = try {
+            String(raw, Charsets.UTF_8).trim()
+        } catch (_: Exception) {
+            return null
+        }
+        if (asText.length >= 32 && asText.take(32).all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+            return hexToBytesEven(asText.take(32))
+        }
+        return null
+    }
+
+    private fun decryptAes128Cbc(ciphertext: ByteArray, key: ByteArray, iv: ByteArray): ByteArray? {
+        return try {
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+            cipher.doFinal(ciphertext)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun findDirectUrlInPlaylist(content: String, baseUrl: String): String? {

@@ -13,6 +13,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -104,9 +105,12 @@ class VideoPlayerActivity : AppCompatActivity() {
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
+                    val hint = if (videoUrl.contains(".mpd", ignoreCase = true)) {
+                        "\n${getString(R.string.dash_play_error)}"
+                    } else ""
                     Toast.makeText(
                         this@VideoPlayerActivity,
-                        "Wiedergabe-Fehler: ${error.localizedMessage}",
+                        "Wiedergabe-Fehler: ${error.localizedMessage}$hint",
                         Toast.LENGTH_LONG
                     ).show()
                     finish()

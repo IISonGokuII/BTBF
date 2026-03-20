@@ -28,4 +28,10 @@
     <string name="chip_favorites">Favoriten</string>
 
     <string name="nav_back">Zurück</string>
+
+    <string name="dash_download_title">DASH-Stream (.mpd)</string>
+    <string name="dash_download_message">DASH (MPEG-DASH) kann in dieser App nicht wie eine einzelne Datei heruntergeladen werden. Zum Speichern bitte die Seite im WebView-Browser öffnen oder eine andere Quelle wählen (HLS/MP4), falls verfügbar.</string>
+    <string name="dash_play_unsupported_title">DASH-Wiedergabe</string>
+    <string name="dash_play_error">DASH-Stream konnte nicht gestartet werden.</string>
+    <string name="ok">OK</string>
 </resources>
