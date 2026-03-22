@@ -105,6 +105,7 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
         setupButtons()
+        setupWebViewContextMenu()
 
         // Berechtigungen anfordern
         requestPermissions()
@@ -731,6 +732,95 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    // === KONTEXTMENÜ (LONG-PRESS) ===
+
+    private fun setupWebViewContextMenu() {
+        webView.setOnLongClickListener {
+            val hitResult = webView.hitTestResult
+            val url = hitResult.extra
+
+            when (hitResult.type) {
+                WebView.HitTestResult.SRC_ANCHOR_TYPE,
+                WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE,
+                WebView.HitTestResult.IMAGE_TYPE -> {
+                    showVideoContextMenu(url)
+                    true
+                }
+                else -> {
+                    // Prüfe ob ein Video-Link unter dem Cursor ist
+                    if (isMouseModeActive) {
+                        showMouseCursorContextMenu()
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showVideoContextMenu(url: String?) {
+        val items = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+
+        // Play/Öffnen
+        items.add("Abspielen")
+        actions.add {
+            if (url != null) {
+                webView.loadUrl(url)
+            }
+        }
+
+        // In neuem Kontext öffnen
+        if (url != null) {
+            items.add("Link öffnen")
+            actions.add { webView.loadUrl(url) }
+        }
+
+        // Zu Favoriten
+        items.add("Zu Favoriten hinzufügen")
+        actions.add { addCurrentVideoToFavorites() }
+
+        // Download
+        items.add("Video herunterladen")
+        actions.add {
+            getCurrentVideoUrl { videoUrl ->
+                if (videoUrl != null) {
+                    downloadVideo(videoUrl, null, "video/mp4")
+                } else if (url != null) {
+                    downloadVideo(url, null, "video/mp4")
+                } else {
+                    Toast.makeText(this, "Kein Video gefunden", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Video")
+            .setItems(items.toTypedArray()) { _, which ->
+                actions[which]()
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun showMouseCursorContextMenu() {
+        // Element unter Cursor finden und Kontextmenü zeigen
+        webView.evaluateJavascript("""
+            (function() {
+                var el = document.elementFromPoint(${mouseCursorX}, ${mouseCursorY});
+                if (el) {
+                    var link = el.closest('a');
+                    if (link) return link.href;
+                }
+                return null;
+            })();
+        """.trimIndent()) { result ->
+            val linkUrl = result?.replace("\"", "")?.takeIf { it != "null" }
+            showVideoContextMenu(linkUrl)
+        }
+    }
+
     // === GESTURE STEUERUNG ===
     
     inner class GestureListener : GestureDetector.SimpleOnGestureListener() {
@@ -774,15 +864,7 @@ class MainActivity : AppCompatActivity() {
         }
         
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            // Einmaliges Tippen zeigt Buttons für 3 Sekunden
-            if (binding.buttonContainer.visibility == View.GONE && !isFullScreen) {
-                binding.buttonContainer.visibility = View.VISIBLE
-                binding.buttonContainer.postDelayed({
-                    if (!isFullScreen) {
-                        binding.buttonContainer.visibility = View.GONE
-                    }
-                }, 3000)
-            }
+            // Bottom-Bar bleibt immer sichtbar (außer im Fullscreen)
             return super.onSingleTapUp(e)
         }
     }
@@ -973,19 +1055,22 @@ class MainActivity : AppCompatActivity() {
     private fun injectVirtualCursor() {
         val cursorScript = """
             (function() {
-                if (document.getElementById('btbf-cursor')) return;
+                // Alten Cursor entfernen falls vorhanden (nach Seitennavigation)
+                var old = document.getElementById('btbf-cursor');
+                if (old) old.remove();
 
                 const cursor = document.createElement('div');
                 cursor.id = 'btbf-cursor';
+                cursor.innerHTML = '<div style="position:absolute;top:50%;left:50%;width:8px;height:8px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);"></div>';
                 cursor.style.cssText = `
                     position: fixed;
-                    width: 24px;
-                    height: 24px;
+                    width: 40px;
+                    height: 40px;
                     border-radius: 50%;
-                    background: rgba(229, 9, 20, 0.8);
-                    border: 3px solid #FFD700;
-                    box-shadow: 0 0 15px rgba(255, 215, 0, 0.6);
-                    z-index: 999999;
+                    background: rgba(229, 9, 20, 0.9);
+                    border: 4px solid #FFD700;
+                    box-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(229, 9, 20, 0.6), inset 0 0 10px rgba(255,255,255,0.3);
+                    z-index: 2147483647;
                     pointer-events: none;
                     display: none;
                     transform: translate(-50%, -50%);
@@ -994,6 +1079,8 @@ class MainActivity : AppCompatActivity() {
                 document.body.appendChild(cursor);
 
                 // Fokus-Styling für Element-Navigation
+                var oldStyle = document.getElementById('btbf-nav-style');
+                if (oldStyle) oldStyle.remove();
                 const style = document.createElement('style');
                 style.id = 'btbf-nav-style';
                 style.textContent = `
@@ -1008,9 +1095,7 @@ class MainActivity : AppCompatActivity() {
                         box-shadow: 0 0 10px rgba(255, 215, 0, 0.5) !important;
                     }
                 `;
-                if (!document.getElementById('btbf-nav-style')) {
-                    document.head.appendChild(style);
-                }
+                document.head.appendChild(style);
 
                 // Alle klickbaren Elemente fokussierbar machen
                 document.querySelectorAll('a, button, input, select, [onclick], [role="button"]').forEach(el => {
@@ -1026,13 +1111,23 @@ class MainActivity : AppCompatActivity() {
     private fun toggleMouseMode() {
         isMouseModeActive = !isMouseModeActive
         if (isMouseModeActive) {
+            // Cursor-Element sicherstellen (könnte nach Seitennavigation fehlen)
+            injectVirtualCursor()
             // Cursor in Bildschirmmitte starten
             mouseCursorX = webView.width / 2
             mouseCursorY = webView.height / 2
-            updateMouseCursorPosition()
-            webView.evaluateJavascript(
-                "document.getElementById('btbf-cursor').style.display = 'block';", null
-            )
+            webView.postDelayed({
+                webView.evaluateJavascript("""
+                    (function() {
+                        var c = document.getElementById('btbf-cursor');
+                        if (c) {
+                            c.style.display = 'block';
+                            c.style.left = '${mouseCursorX}px';
+                            c.style.top = '${mouseCursorY}px';
+                        }
+                    })();
+                """.trimIndent(), null)
+            }, 100)
             Toast.makeText(this, "Maus-Modus AN - D-Pad bewegt Cursor", Toast.LENGTH_SHORT).show()
         } else {
             webView.evaluateJavascript("""
@@ -1168,32 +1263,62 @@ class MainActivity : AppCompatActivity() {
     // ==================== KACHELGRÖSSE ====================
 
     private fun applyTileScale() {
-        val scale = tileScalePercent / 100.0
+        val widthPercent = tileScalePercent
         val script = """
             (function() {
                 var style = document.getElementById('btbf-tile-scale');
                 if (style) style.remove();
+                if (${widthPercent} === 100) return; // Standard - keine Änderung nötig
+
                 style = document.createElement('style');
                 style.id = 'btbf-tile-scale';
+
+                // Berechne Spaltenanzahl basierend auf Prozent
+                // Kleiner = mehr Spalten, Größer = weniger Spalten
+                var colWidth = ${widthPercent};
+
                 style.textContent = `
-                    /* Video-Kacheln/Thumbnails skalieren */
+                    /* Video-Kacheln Größe über Breite steuern */
                     .thumb-list__item,
                     .video-item,
                     .thumb-item,
-                    [class*="thumb"],
-                    [class*="video-card"],
-                    [class*="video-item"],
-                    [class*="video_item"],
                     .mozaique .thumb-block,
                     .mozaique > div,
                     .videos-list > div,
                     .thumbs-list > div,
                     .list-videos .video,
                     ul.videos li,
-                    .video-list-item {
-                        transform: scale(${scale}) !important;
-                        transform-origin: top left !important;
-                        margin-bottom: ${if (scale < 1.0) "-${((1.0 - scale) * 50).toInt()}px" else "0px"} !important;
+                    .video-list-item,
+                    [class*="video-card"],
+                    [class*="video-item"],
+                    [class*="video_item"] {
+                        width: $colWidth% !important;
+                        max-width: $colWidth% !important;
+                        flex-basis: $colWidth% !important;
+                        box-sizing: border-box !important;
+                    }
+
+                    /* Container auf Flex-Wrap umstellen */
+                    .thumb-list,
+                    .mozaique,
+                    .videos-list,
+                    .thumbs-list,
+                    .list-videos,
+                    ul.videos {
+                        display: flex !important;
+                        flex-wrap: wrap !important;
+                    }
+
+                    /* Bilder und Vorschau an Kachel anpassen */
+                    .thumb-list__item img,
+                    .video-item img,
+                    .thumb-item img,
+                    .mozaique .thumb-block img,
+                    [class*="video-card"] img,
+                    [class*="video-item"] img,
+                    [class*="thumb"] img {
+                        width: 100% !important;
+                        height: auto !important;
                     }
                 `;
                 document.head.appendChild(style);
@@ -1277,39 +1402,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTileSizeDialog() {
-        val seekBar = SeekBar(this).apply {
-            max = 100 // 50-150 -> offset by 50
-            progress = tileScalePercent - 50
-            setPadding(48, 24, 48, 24)
+        // Voreinstellungen: 20% (5 Spalten), 25% (4), 33% (3), 50% (2), 100% (1)
+        val sizes = arrayOf("Klein (5 pro Reihe)", "Mittel-Klein (4 pro Reihe)", "Mittel (3 pro Reihe)", "Groß (2 pro Reihe)", "Sehr groß (1 pro Reihe)", "Standard (Website-Layout)")
+        val values = intArrayOf(20, 25, 33, 50, 100, 100)
+
+        // Aktuell ausgewählt finden
+        val currentIndex = when (tileScalePercent) {
+            20 -> 0
+            25 -> 1
+            33 -> 2
+            50 -> 3
+            else -> 5 // Standard
         }
 
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Kachelgröße: ${tileScalePercent}%")
-            .setView(seekBar)
-            .setPositiveButton("OK") { _, _ ->
-                tileScalePercent = seekBar.progress + 50
+        AlertDialog.Builder(this)
+            .setTitle("Kachelgröße")
+            .setSingleChoiceItems(sizes, currentIndex) { dialog, which ->
+                tileScalePercent = values[which]
                 prefs.edit().putInt("tile_scale", tileScalePercent).apply()
                 applyTileScale()
-                Toast.makeText(this, "Kachelgröße: ${tileScalePercent}%", Toast.LENGTH_SHORT).show()
-            }
-            .setNeutralButton("Zurücksetzen") { _, _ ->
-                tileScalePercent = 100
-                prefs.edit().putInt("tile_scale", 100).apply()
-                applyTileScale()
-                Toast.makeText(this, "Kachelgröße zurückgesetzt", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, sizes[which], Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
             }
             .setNegativeButton("Abbrechen", null)
-            .create()
-
-        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                dialog.setTitle("Kachelgröße: ${progress + 50}%")
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        })
-
-        dialog.show()
+            .show()
     }
 
     // ==================== NAVIGATION FUNKTIONEN ====================
