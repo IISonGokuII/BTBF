@@ -5,6 +5,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -68,6 +69,17 @@ class MainActivity : AppCompatActivity() {
 
     // Einstellungen
     private lateinit var prefs: SharedPreferences
+
+    // Erlaubte Domains - nur diese Seiten werden im Verlauf behalten
+    private val allowedDomains = listOf(
+        "borntobefuck.com",
+        "borntobefucked.com",
+        "btbf.com"
+    )
+
+    // Navigations-Verlauf (nur echte Seiten, keine Redirects)
+    private val pageHistory = mutableListOf<String>()
+    private var isNavigatingBack = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -160,13 +172,40 @@ class MainActivity : AppCompatActivity() {
                 view: WebView,
                 request: WebResourceRequest
             ): Boolean {
-                // Alle URLs im WebView öffnen
+                val url = request.url.toString()
+                val host = request.url.host ?: ""
+
+                // Fremde Domains blockieren (Redirects, Tracker, Werbung)
+                val isSiteDomain = allowedDomains.any { host.contains(it, ignoreCase = true) }
+                if (!isSiteDomain && host.isNotEmpty()) {
+                    // Externe URL blockieren - nicht im WebView öffnen
+                    return true
+                }
+
                 return false
+            }
+
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                binding.progressBar.visibility = View.VISIBLE
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 binding.progressBar.visibility = View.GONE
+
+                // Echte Seiten-URL zum eigenen Verlauf hinzufügen
+                url?.let {
+                    if (!isNavigatingBack) {
+                        val host = Uri.parse(it).host ?: ""
+                        if (allowedDomains.any { d -> host.contains(d, ignoreCase = true) }) {
+                            if (pageHistory.isEmpty() || pageHistory.last() != it) {
+                                pageHistory.add(it)
+                            }
+                        }
+                    }
+                    isNavigatingBack = false
+                }
 
                 // Verbesserter AdBlocker + Komfort-Features
                 injectComfortScripts()
@@ -377,10 +416,7 @@ class MainActivity : AppCompatActivity() {
 
         // Back Button im Button Container
         binding.btnBack.setOnClickListener {
-            if (webView.canGoBack()) {
-                saveScrollPosition()
-                webView.goBack()
-            }
+            navigateBack()
         }
         
         // Favorites Button
@@ -391,6 +427,11 @@ class MainActivity : AppCompatActivity() {
         // Settings Button
         binding.btnSettings.setOnClickListener {
             showSettingsMenu()
+        }
+
+        // Search Button
+        binding.btnSearch.setOnClickListener {
+            showSearchDialog()
         }
 
         // === KATEGORIE SCHNELLZUGRIFF ===
@@ -418,7 +459,13 @@ class MainActivity : AppCompatActivity() {
             webView.loadUrl("${websiteUrl}random")
             hideCategoryBar()
         }
-        
+
+        // Suche in Kategorien-Leiste
+        binding.btnCatSearch.setOnClickListener {
+            hideCategoryBar()
+            showSearchDialog()
+        }
+
         // Kategorien-Leiste nach 3 Sekunden ausblenden
         binding.categoryScroll.postDelayed({
             hideCategoryBar()
@@ -588,9 +635,7 @@ class MainActivity : AppCompatActivity() {
                     webView.evaluateJavascript("document.exitFullscreen();", null)
                     return true
                 }
-                if (webView.canGoBack()) {
-                    saveScrollPosition()
-                    webView.goBack()
+                if (navigateBack()) {
                     return true
                 }
             }
@@ -654,10 +699,7 @@ class MainActivity : AppCompatActivity() {
             webView.evaluateJavascript("document.exitFullscreen();", null)
             return
         }
-        if (webView.canGoBack()) {
-            saveScrollPosition()
-            webView.goBack()
-        } else {
+        if (!navigateBack()) {
             super.onBackPressed()
         }
     }
@@ -1054,6 +1096,52 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript(script, null)
     }
 
+    // ==================== SMART BACK NAVIGATION ====================
+
+    /**
+     * Navigiert zurück zur vorherigen echten Seite.
+     * Benutzt eigenen Verlauf um Redirect-Schleifen zu umgehen.
+     * @return true wenn Navigation stattfand
+     */
+    private fun navigateBack(): Boolean {
+        saveScrollPosition()
+
+        // Eigenen Verlauf nutzen wenn vorhanden
+        if (pageHistory.size >= 2) {
+            // Aktuelle Seite entfernen
+            pageHistory.removeLastOrNull()
+            // Vorherige Seite laden
+            val previousUrl = pageHistory.lastOrNull()
+            if (previousUrl != null) {
+                isNavigatingBack = true
+                webView.loadUrl(previousUrl)
+                return true
+            }
+        }
+
+        // Fallback: WebView-eigenen Verlauf nutzen
+        if (webView.canGoBack()) {
+            isNavigatingBack = true
+            // Mehrere Schritte zurück springen um Redirects zu überspringen
+            val backList = webView.copyBackForwardList()
+            val currentIndex = backList.currentIndex
+            for (i in currentIndex - 1 downTo 0) {
+                val item = backList.getItemAtIndex(i)
+                val url = item.url
+                val host = Uri.parse(url).host ?: ""
+                if (allowedDomains.any { host.contains(it, ignoreCase = true) }) {
+                    webView.goBackOrForward(i - currentIndex)
+                    return true
+                }
+            }
+            // Kein erlaubter Eintrag gefunden, einfach zurück
+            webView.goBack()
+            return true
+        }
+
+        return false
+    }
+
     // ==================== SCROLL-POSITION SPEICHER ====================
 
     private fun saveScrollPosition() {
@@ -1120,7 +1208,9 @@ class MainActivity : AppCompatActivity() {
         val items = arrayOf(
             if (isMouseModeActive) "Maus-Modus AUS" else "Maus-Modus AN",
             "Kachelgröße ändern",
+            "Suche",
             "Favoriten",
+            "Verlauf löschen",
             "Seite neu laden",
             "Zur Startseite"
         )
@@ -1131,12 +1221,58 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     0 -> toggleMouseMode()
                     1 -> showTileSizeDialog()
-                    2 -> showFavoritesDialog()
-                    3 -> webView.reload()
-                    4 -> webView.loadUrl(websiteUrl)
+                    2 -> showSearchDialog()
+                    3 -> showFavoritesDialog()
+                    4 -> clearHistory()
+                    5 -> webView.reload()
+                    6 -> webView.loadUrl(websiteUrl)
                 }
             }
             .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun showSearchDialog() {
+        val input = android.widget.EditText(this).apply {
+            hint = "Suchbegriff eingeben..."
+            setPadding(48, 24, 48, 24)
+            setTextColor(android.graphics.Color.WHITE)
+            setHintTextColor(android.graphics.Color.GRAY)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Suche")
+            .setView(input)
+            .setPositiveButton("Suchen") { _, _ ->
+                val query = input.text.toString().trim()
+                if (query.isNotEmpty()) {
+                    val searchUrl = "${websiteUrl}search?q=${Uri.encode(query)}"
+                    webView.loadUrl(searchUrl)
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+
+        // Tastatur sofort anzeigen
+        input.requestFocus()
+        input.postDelayed({
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }, 200)
+    }
+
+    private fun clearHistory() {
+        AlertDialog.Builder(this)
+            .setTitle("Verlauf löschen")
+            .setMessage("WebView-Verlauf und gespeicherte Daten löschen?")
+            .setPositiveButton("Löschen") { _, _ ->
+                webView.clearHistory()
+                webView.clearCache(true)
+                pageHistory.clear()
+                scrollPositionMap.clear()
+                Toast.makeText(this, "Verlauf gelöscht", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Abbrechen", null)
             .show()
     }
 

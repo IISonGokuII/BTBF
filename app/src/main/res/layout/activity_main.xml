@@ -109,6 +109,16 @@
                 android:textColor="@android:color/white"
                 android:textSize="12sp" />
 
+            <Button
+                android:id="@+id/btnCatSearch"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="🔍 Suche"
+                android:textColor="@android:color/white"
+                android:textSize="12sp" />
+
         </LinearLayout>
     </HorizontalScrollView>
 
@@ -156,6 +166,17 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Aktualisieren"
             android:src="@android:drawable/ic_menu_rotate"
+            app:tint="@android:color/white" />
+
+        <!-- Search Button -->
+        <ImageButton
+            android:id="@+id/btnSearch"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_margin="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Suche"
+            android:src="@android:drawable/ic_menu_search"
             app:tint="@android:color/white" />
 
         <!-- Download Button -->
