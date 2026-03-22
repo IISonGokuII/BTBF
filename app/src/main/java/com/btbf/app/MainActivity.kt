@@ -21,20 +21,20 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
-import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.btbf.app.databinding.ActivityMainBinding
 import com.btbf.app.databinding.DialogFavoritesBinding
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -61,8 +61,10 @@ class MainActivity : AppCompatActivity() {
     private var mouseCursorY = 0
     private val mouseStepSize = 30 // Pixel pro D-Pad Druck
 
-    // Scroll-Position Speicher (URL -> ScrollY)
-    private val scrollPositionMap = mutableMapOf<String, Int>()
+    // Scroll-Position Speicher (URL -> ScrollY), max 50 Einträge
+    private val scrollPositionMap = object : LinkedHashMap<String, Int>(50, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > 50
+    }
 
     // Kachelgröße (Prozent: 50-150, Standard 100)
     private var tileScalePercent = 100
@@ -492,22 +494,20 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun getCurrentVideoUrl(callback: (String?) -> Unit) {
-        CoroutineScope(Dispatchers.Main).launch {
-            webView.evaluateJavascript("""
-                (function() {
-                    const videos = document.querySelectorAll('video');
-                    if (videos.length > 0) {
-                        return videos[0].currentSrc || videos[0].src;
-                    }
-                    const sources = document.querySelectorAll('source[src*="video"]');
-                    if (sources.length > 0) {
-                        return sources[0].src;
-                    }
-                    return null;
-                })();
-            """.trimIndent()) { result ->
-                callback(result?.replace("\"", "")?.takeIf { it != "null" })
-            }
+        webView.evaluateJavascript("""
+            (function() {
+                const videos = document.querySelectorAll('video');
+                if (videos.length > 0) {
+                    return videos[0].currentSrc || videos[0].src;
+                }
+                const sources = document.querySelectorAll('source[src*="video"]');
+                if (sources.length > 0) {
+                    return sources[0].src;
+                }
+                return null;
+            })();
+        """.trimIndent()) { result ->
+            callback(result?.replace("\"", "")?.takeIf { it != "null" })
         }
     }
     
@@ -563,22 +563,14 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun hideSystemUI() {
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_FULLSCREEN
-        )
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
-    
+
     private fun showSystemUI() {
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-        )
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.show(WindowInsetsCompat.Type.systemBars())
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -719,14 +711,14 @@ class MainActivity : AppCompatActivity() {
     inner class WebAppInterface(private val context: Context) {
         @JavascriptInterface
         fun downloadVideo(url: String) {
-            CoroutineScope(Dispatchers.Main).launch {
+            lifecycleScope.launch {
                 downloadVideo(url, null, "video/mp4")
             }
         }
 
         @JavascriptInterface
         fun showToast(message: String) {
-            CoroutineScope(Dispatchers.Main).launch {
+            lifecycleScope.launch {
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
         }
@@ -899,12 +891,12 @@ class MainActivity : AppCompatActivity() {
                         0 -> {
                             dialogBinding.videosTabContent.visibility = View.VISIBLE
                             dialogBinding.actorsTabContent.visibility = View.GONE
-                            loadFavoriteVideos(dialogBinding.recyclerFavoriteVideos, dialogBinding.emptyVideosState)
+                            loadFavoriteVideos(dialogBinding.recyclerFavoriteVideos, dialogBinding.emptyVideosState, dialog)
                         }
                         1 -> {
                             dialogBinding.videosTabContent.visibility = View.GONE
                             dialogBinding.actorsTabContent.visibility = View.VISIBLE
-                            loadFavoriteActors(dialogBinding.recyclerFavoriteActors, dialogBinding.emptyActorsState)
+                            loadFavoriteActors(dialogBinding.recyclerFavoriteActors, dialogBinding.emptyActorsState, dialog)
                         }
                     }
                 }
@@ -936,40 +928,87 @@ class MainActivity : AppCompatActivity() {
         // Ersten Tab laden
         dialogBinding.videosTabContent.visibility = View.VISIBLE
         dialogBinding.actorsTabContent.visibility = View.GONE
-        loadFavoriteVideos(dialogBinding.recyclerFavoriteVideos, dialogBinding.emptyVideosState)
-        
+        loadFavoriteVideos(dialogBinding.recyclerFavoriteVideos, dialogBinding.emptyVideosState, dialog)
+
         dialog.show()
     }
     
     /**
      * Favoriten-Videos laden
      */
-    private fun loadFavoriteVideos(recyclerView: androidx.recyclerview.widget.RecyclerView, emptyView: View) {
+    private fun loadFavoriteVideos(
+        recyclerView: androidx.recyclerview.widget.RecyclerView,
+        emptyView: View,
+        dialog: AlertDialog
+    ) {
         val videos = favoritesManager.getFavoriteVideos()
-        
+
         if (videos.isEmpty()) {
             recyclerView.visibility = View.GONE
             emptyView.visibility = View.VISIBLE
         } else {
             recyclerView.visibility = View.VISIBLE
             emptyView.visibility = View.GONE
-            // TODO: RecyclerView Adapter implementieren
+
+            if (recyclerView.layoutManager == null) {
+                recyclerView.layoutManager = LinearLayoutManager(this)
+            }
+
+            val adapter = recyclerView.adapter as? FavoriteVideoAdapter
+            if (adapter != null) {
+                adapter.updateVideos(videos)
+            } else {
+                recyclerView.adapter = FavoriteVideoAdapter(
+                    videos,
+                    onPlay = { video ->
+                        val url = video.id
+                        if (url.startsWith("http")) {
+                            dialog.dismiss()
+                            webView.loadUrl(url)
+                        }
+                    },
+                    onRemove = { video ->
+                        favoritesManager.removeFavoriteVideo(video.id)
+                        loadFavoriteVideos(recyclerView, emptyView, dialog)
+                    }
+                )
+            }
         }
     }
-    
-    /**
-     * Favoriten-Darsteller laden
-     */
-    private fun loadFavoriteActors(recyclerView: androidx.recyclerview.widget.RecyclerView, emptyView: View) {
+
+    private fun loadFavoriteActors(
+        recyclerView: androidx.recyclerview.widget.RecyclerView,
+        emptyView: View,
+        dialog: AlertDialog
+    ) {
         val actors = favoritesManager.getFavoriteActors()
-        
+
         if (actors.isEmpty()) {
             recyclerView.visibility = View.GONE
             emptyView.visibility = View.VISIBLE
         } else {
             recyclerView.visibility = View.VISIBLE
             emptyView.visibility = View.GONE
-            // TODO: RecyclerView Adapter implementieren
+
+            if (recyclerView.layoutManager == null) {
+                recyclerView.layoutManager = LinearLayoutManager(this)
+            }
+
+            val adapter = recyclerView.adapter as? FavoriteActorAdapter
+            if (adapter != null) {
+                adapter.updateActors(actors)
+            } else {
+                recyclerView.adapter = FavoriteActorAdapter(
+                    actors,
+                    onClick = { actor ->
+                        dialog.dismiss()
+                    },
+                    onRemove = { actor ->
+                        favoritesManager.removeFavoriteActor(actor.id)
+                        loadFavoriteActors(recyclerView, emptyView, dialog)
+                    }
+                )
+            }
         }
     }
     
@@ -1005,29 +1044,30 @@ class MainActivity : AppCompatActivity() {
      * Aktuelles Video zu Favoriten hinzufügen
      */
     fun addCurrentVideoToFavorites() {
-        CoroutineScope(Dispatchers.Main).launch {
-            withContext(Dispatchers.Main) {
-                webView.evaluateJavascript("""
-                    (function() {
-                        const title = document.querySelector('h1')?.textContent || document.title;
-                        const thumbnail = document.querySelector('video')?.poster ||
-                                        document.querySelector('meta[property="og:image"]')?.content || '';
-                        return JSON.stringify({title: title, thumbnail: thumbnail});
-                    })();
-                """.trimIndent()) { result ->
-                    if (result != null) {
-                        try {
-                            val json = org.json.JSONObject(result)
-                            val title = json.optString("title", "Unbekanntes Video")
-                            val thumbnail = json.optString("thumbnail", "")
-                            val videoId = webView.url.hashCode().toString()
-
-                            favoritesManager.addFavoriteVideo(videoId, title, thumbnail)
-                            Toast.makeText(this@MainActivity, "⭐ Zu Favoriten hinzugefügt", Toast.LENGTH_SHORT).show()
-                        } catch (e: Exception) {
-                            Toast.makeText(this@MainActivity, "Fehler: ${e.message}", Toast.LENGTH_SHORT).show()
-                        }
+        webView.evaluateJavascript("""
+            (function() {
+                const title = document.querySelector('h1')?.textContent || document.title;
+                const thumbnail = document.querySelector('video')?.poster ||
+                                document.querySelector('meta[property="og:image"]')?.content || '';
+                return JSON.stringify({title: title, thumbnail: thumbnail});
+            })();
+        """.trimIndent()) { result ->
+            if (result != null && result != "null") {
+                try {
+                    val cleaned = result.trim().let {
+                        if (it.startsWith("\"") && it.endsWith("\""))
+                            it.substring(1, it.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
+                        else it
                     }
+                    val json = org.json.JSONObject(cleaned)
+                    val title = json.optString("title", "Unbekanntes Video")
+                    val thumbnail = json.optString("thumbnail", "")
+                    val videoUrl = webView.url ?: return@evaluateJavascript
+
+                    favoritesManager.addFavoriteVideo(videoUrl, title, thumbnail)
+                    Toast.makeText(this, "Zu Favoriten hinzugefuegt", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Fehler: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -1037,7 +1077,7 @@ class MainActivity : AppCompatActivity() {
      * Prüfen ob aktuelles Video Favorit ist
      */
     fun isCurrentVideoFavorite(): Boolean {
-        val videoId = webView.url.hashCode().toString()
+        val videoId = webView.url ?: return false
         return favoritesManager.isVideoFavorite(videoId)
     }
     
@@ -1045,7 +1085,7 @@ class MainActivity : AppCompatActivity() {
      * Video aus Favoriten entfernen
      */
     fun removeCurrentVideoFromFavorites() {
-        val videoId = webView.url.hashCode().toString()
+        val videoId = webView.url ?: return
         favoritesManager.removeFavoriteVideo(videoId)
         Toast.makeText(this, "Aus Favoriten entfernt", Toast.LENGTH_SHORT).show()
     }

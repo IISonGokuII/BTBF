@@ -65,6 +65,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     
+    // Bild-Laden für Thumbnails
+    implementation("io.coil-kt:coil:2.5.0")
+
     // Download Manager
     implementation("androidx.documentfile:documentfile:1.0.1")
     

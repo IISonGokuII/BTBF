@@ -1,4 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BTBF</string>
+
+    <!-- Navigation -->
+    <string name="home">Home</string>
+    <string name="back">Zurueck</string>
+    <string name="refresh">Aktualisieren</string>
+    <string name="search">Suche</string>
+    <string name="download">Download</string>
+    <string name="fullscreen">Vollbild</string>
+    <string name="favorites">Favoriten</string>
+    <string name="settings">Einstellungen</string>
+
+    <!-- Kategorien -->
+    <string name="cat_new">Neu</string>
+    <string name="cat_top">Top</string>
+    <string name="cat_random">Zufall</string>
+
+    <!-- Einstellungen -->
+    <string name="mouse_mode_on">Maus-Modus AN</string>
+    <string name="mouse_mode_off">Maus-Modus AUS</string>
+    <string name="mouse_mode_hint">Maus-Modus AN - D-Pad bewegt Cursor</string>
+    <string name="tile_size">Kachelgroesse</string>
+    <string name="clear_history">Verlauf loeschen</string>
+    <string name="go_home">Zur Startseite</string>
+    <string name="reload">Seite neu laden</string>
+
+    <!-- Favoriten -->
+    <string name="my_favorites">Meine Favoriten</string>
+    <string name="videos">Videos</string>
+    <string name="actors">Darsteller</string>
+    <string name="no_video_favorites">Keine Video-Favoriten</string>
+    <string name="no_actor_favorites">Keine Darsteller-Favoriten</string>
+    <string name="added_to_favorites">Zu Favoriten hinzugefuegt</string>
+    <string name="removed_from_favorites">Aus Favoriten entfernt</string>
+    <string name="removed">Entfernt</string>
+    <string name="export">Export</string>
+    <string name="delete_all">Alle loeschen</string>
+    <string name="delete_all_confirm">Alle Favoriten loeschen?</string>
+    <string name="delete_all_message">Moechtest du wirklich alle Favoriten loeschen?</string>
+    <string name="delete">Loeschen</string>
+    <string name="cancel">Abbrechen</string>
+    <string name="close">Schliessen</string>
+    <string name="exported">Favoriten exportiert</string>
+    <string name="all_deleted">Alle Favoriten geloescht</string>
+
+    <!-- Kontextmenue -->
+    <string name="play">Abspielen</string>
+    <string name="open_link">Link oeffnen</string>
+    <string name="add_to_favorites">Zu Favoriten hinzufuegen</string>
+    <string name="download_video">Video herunterladen</string>
+    <string name="video">Video</string>
+
+    <!-- Download -->
+    <string name="download_started">Download gestartet</string>
+    <string name="no_video_found">Kein Video gefunden</string>
+    <string name="download_failed">Download fehlgeschlagen</string>
+
+    <!-- Suche -->
+    <string name="search_hint">Suchbegriff eingeben...</string>
+
+    <!-- Kachelgroesse -->
+    <string name="size_small">Klein (5 pro Reihe)</string>
+    <string name="size_medium_small">Mittel-Klein (4 pro Reihe)</string>
+    <string name="size_medium">Mittel (3 pro Reihe)</string>
+    <string name="size_large">Gross (2 pro Reihe)</string>
+    <string name="size_very_large">Sehr gross (1 pro Reihe)</string>
+    <string name="size_default">Standard (Website-Layout)</string>
+
+    <!-- Verlauf -->
+    <string name="clear_history_confirm">WebView-Verlauf und gespeicherte Daten loeschen?</string>
+    <string name="history_cleared">Verlauf geloescht</string>
 </resources>
