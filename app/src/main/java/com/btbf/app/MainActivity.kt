@@ -57,17 +57,18 @@ class MainActivity : AppCompatActivity() {
 
     // Maus-Modus Zustand
     private var isMouseModeActive = false
-    private var mouseCursorX = 0
-    private var mouseCursorY = 0
     private val mouseStepSize = 30 // Pixel pro D-Pad Druck
+
+    // Bottom-Bar Zustand
+    private var isBottomBarFocused = false
 
     // Scroll-Position Speicher (URL -> ScrollY), max 50 Einträge
     private val scrollPositionMap = object : LinkedHashMap<String, Int>(50, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > 50
     }
 
-    // Kachelgröße (Prozent: 50-150, Standard 100)
-    private var tileScalePercent = 100
+    // Kachelgröße (Prozent: 0=Standard/aus, 20-100 = Spaltenbreite)
+    private var tileScalePercent = 0
 
     // Einstellungen
     private lateinit var prefs: SharedPreferences
@@ -97,7 +98,7 @@ class MainActivity : AppCompatActivity() {
         
         // Einstellungen laden
         prefs = getSharedPreferences("btbf_settings", Context.MODE_PRIVATE)
-        tileScalePercent = prefs.getInt("tile_scale", 100)
+        tileScalePercent = prefs.getInt("tile_scale", 0)
 
         // Favoriten Manager initialisieren
         favoritesManager = FavoritesManager(this)
@@ -218,6 +219,10 @@ class MainActivity : AppCompatActivity() {
 
                 // Maus-Cursor injizieren (immer bereit, aber nur sichtbar wenn aktiv)
                 injectVirtualCursor()
+                // Wenn Maus-Modus aktiv, Cursor sofort zeigen nach Seitennavigation
+                if (isMouseModeActive) {
+                    showCursorAtPosition()
+                }
 
                 // Scroll-Position wiederherstellen wenn vorhanden
                 url?.let { restoreScrollPosition(it) }
@@ -388,10 +393,24 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupButtons() {
+        // Bottom-Bar Focus-Tracking: Wenn Fokus die Bar verlässt, zurücksetzen
+        val barButtons = listOf(
+            binding.btnHome, binding.btnBack, binding.btnRefresh, binding.btnSearch,
+            binding.btnDownload, binding.btnFullscreen, binding.btnFavorites, binding.btnSettings
+        )
+        barButtons.forEach { btn ->
+            btn.setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    isBottomBarFocused = true
+                }
+            }
+        }
+
         // === HAUPT-NAVIGATION ===
-        
+
         // Home Button
         binding.btnHome.setOnClickListener {
+            isBottomBarFocused = false
             webView.loadUrl(websiteUrl)
         }
 
@@ -419,6 +438,7 @@ class MainActivity : AppCompatActivity() {
 
         // Back Button im Button Container
         binding.btnBack.setOnClickListener {
+            isBottomBarFocused = false
             navigateBack()
         }
         
@@ -475,6 +495,14 @@ class MainActivity : AppCompatActivity() {
         }, 3000)
     }
     
+    private fun focusBottomBar() {
+        isBottomBarFocused = true
+        binding.buttonContainer.visibility = View.VISIBLE
+        // Ersten Button fokussieren
+        binding.btnHome.requestFocus()
+        Toast.makeText(this, "Leiste aktiv - Hoch um zurueck", Toast.LENGTH_SHORT).show()
+    }
+
     private fun hideCategoryBar() {
         binding.categoryScroll.animate()
             .translationY(-binding.categoryScroll.height.toFloat())
@@ -579,7 +607,15 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_UP -> {
                 if (isMouseModeActive) {
                     moveMouseCursor(0, -mouseStepSize)
-                } else if (binding.categoryScroll.visibility == View.GONE) {
+                    return true
+                }
+                if (isBottomBarFocused) {
+                    // Aus Bottom-Bar zurück zum WebView
+                    isBottomBarFocused = false
+                    webView.requestFocus()
+                    return true
+                }
+                if (binding.categoryScroll.visibility == View.GONE) {
                     navigateToPreviousElement()
                 } else {
                     showCategoryBar()
@@ -589,34 +625,50 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if (isMouseModeActive) {
                     moveMouseCursor(0, mouseStepSize)
-                } else {
-                    navigateToNextElement()
+                    return true
                 }
+                if (isBottomBarFocused) {
+                    // In Bottom-Bar: native Fokus-Navigation zulassen
+                    return super.onKeyDown(keyCode, event)
+                }
+                navigateToNextElement()
                 return true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
                 if (isMouseModeActive) {
                     moveMouseCursor(-mouseStepSize, 0)
-                } else {
-                    scrollWebView("left", 200)
+                    return true
                 }
+                if (isBottomBarFocused) {
+                    // In Bottom-Bar: native Fokus-Navigation zulassen
+                    return super.onKeyDown(keyCode, event)
+                }
+                scrollWebView("left", 200)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 if (isMouseModeActive) {
                     moveMouseCursor(mouseStepSize, 0)
-                } else {
-                    scrollWebView("right", 200)
+                    return true
                 }
+                if (isBottomBarFocused) {
+                    // In Bottom-Bar: native Fokus-Navigation zulassen
+                    return super.onKeyDown(keyCode, event)
+                }
+                scrollWebView("right", 200)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER -> {
                 if (isMouseModeActive) {
                     clickAtMouseCursor()
-                } else {
-                    clickFocusedElement()
+                    return true
                 }
+                if (isBottomBarFocused) {
+                    // In Bottom-Bar: native Klick zulassen
+                    return super.onKeyDown(keyCode, event)
+                }
+                clickFocusedElement()
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {
@@ -651,6 +703,9 @@ class MainActivity : AppCompatActivity() {
                     )
                     return true
                 }
+                // Nicht im Fullscreen: Bottom-Bar fokussieren
+                focusBottomBar()
+                return true
             }
             KeyEvent.KEYCODE_S -> {
                 scrollWebView("down", 500)
@@ -800,7 +855,7 @@ class MainActivity : AppCompatActivity() {
         // Element unter Cursor finden und Kontextmenü zeigen
         webView.evaluateJavascript("""
             (function() {
-                var el = document.elementFromPoint(${mouseCursorX}, ${mouseCursorY});
+                var el = document.elementFromPoint(${cssCursorX}, ${cssCursorY});
                 if (el) {
                     var link = el.closest('a');
                     if (link) return link.href;
@@ -1148,26 +1203,27 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript(cursorScript, null)
     }
 
+    // CSS-Pixel Koordinaten des Cursors (nicht Android-Pixel!)
+    private var cssCursorX = 0f
+    private var cssCursorY = 0f
+
     private fun toggleMouseMode() {
         isMouseModeActive = !isMouseModeActive
         if (isMouseModeActive) {
-            // Cursor-Element sicherstellen (könnte nach Seitennavigation fehlen)
             injectVirtualCursor()
-            // Cursor in Bildschirmmitte starten
-            mouseCursorX = webView.width / 2
-            mouseCursorY = webView.height / 2
-            webView.postDelayed({
-                webView.evaluateJavascript("""
-                    (function() {
-                        var c = document.getElementById('btbf-cursor');
-                        if (c) {
-                            c.style.display = 'block';
-                            c.style.left = '${mouseCursorX}px';
-                            c.style.top = '${mouseCursorY}px';
-                        }
-                    })();
-                """.trimIndent(), null)
-            }, 100)
+            // CSS-Viewport-Mitte berechnen
+            webView.evaluateJavascript("JSON.stringify({w: window.innerWidth, h: window.innerHeight})") { result ->
+                try {
+                    val cleaned = result?.replace("\\\"", "\"")?.trim('"') ?: ""
+                    val json = org.json.JSONObject(cleaned)
+                    cssCursorX = json.getInt("w") / 2f
+                    cssCursorY = json.getInt("h") / 2f
+                } catch (_: Exception) {
+                    cssCursorX = 400f
+                    cssCursorY = 300f
+                }
+                showCursorAtPosition()
+            }
             Toast.makeText(this, "Maus-Modus AN - D-Pad bewegt Cursor", Toast.LENGTH_SHORT).show()
         } else {
             webView.evaluateJavascript("""
@@ -1181,30 +1237,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun moveMouseCursor(dx: Int, dy: Int) {
-        mouseCursorX = (mouseCursorX + dx).coerceIn(0, webView.width)
-        mouseCursorY = (mouseCursorY + dy).coerceIn(0, webView.height)
-
-        // Am Rand scrollen
-        if (mouseCursorY < 50) scrollWebView("up", 100)
-        if (mouseCursorY > webView.height - 50) scrollWebView("down", 100)
-        if (mouseCursorX < 50) scrollWebView("left", 100)
-        if (mouseCursorX > webView.width - 50) scrollWebView("right", 100)
-
-        updateMouseCursorPosition()
+    private fun showCursorAtPosition() {
+        val x = cssCursorX
+        val y = cssCursorY
+        webView.evaluateJavascript("""
+            (function() {
+                var c = document.getElementById('btbf-cursor');
+                if (c) {
+                    c.style.display = 'block';
+                    c.style.left = '${x}px';
+                    c.style.top = '${y}px';
+                }
+            })();
+        """.trimIndent(), null)
     }
 
-    private fun updateMouseCursorPosition() {
+    private fun moveMouseCursor(dx: Int, dy: Int) {
+        // Bewege in CSS-Pixel (step = 15 CSS-Pixel)
+        val cssStep = 15f
+        cssCursorX = (cssCursorX + dx / mouseStepSize.toFloat() * cssStep).coerceAtLeast(0f)
+        cssCursorY = (cssCursorY + dy / mouseStepSize.toFloat() * cssStep).coerceAtLeast(0f)
+
+        updateMouseCursorPositionAndScroll(dx, dy)
+    }
+
+    private fun updateMouseCursorPositionAndScroll(dx: Int, dy: Int) {
+        val x = cssCursorX
+        val y = cssCursorY
+        val scrollMargin = 40
+        val scrollAmount = 100
         val script = """
             (function() {
                 var c = document.getElementById('btbf-cursor');
                 if (!c) return;
-                c.style.left = '${mouseCursorX}px';
-                c.style.top = '${mouseCursorY}px';
+                var maxX = window.innerWidth - 10;
+                var maxY = window.innerHeight - 10;
+                var cx = Math.min(${x}, maxX);
+                var cy = Math.min(${y}, maxY);
+                c.style.left = cx + 'px';
+                c.style.top = cy + 'px';
+
+                // Am Rand scrollen
+                if (cy <= ${scrollMargin} && ${dy} < 0) window.scrollBy(0, -${scrollAmount});
+                if (cy >= maxY - ${scrollMargin} && ${dy} > 0) window.scrollBy(0, ${scrollAmount});
+                if (cx <= ${scrollMargin} && ${dx} < 0) window.scrollBy(-${scrollAmount}, 0);
+                if (cx >= maxX - ${scrollMargin} && ${dx} > 0) window.scrollBy(${scrollAmount}, 0);
 
                 // Highlight Element unter Cursor
                 document.querySelectorAll('.btbf-cursor-hover').forEach(el => el.classList.remove('btbf-cursor-hover'));
-                var el = document.elementFromPoint(${mouseCursorX}, ${mouseCursorY});
+                var el = document.elementFromPoint(cx, cy);
                 if (el) {
                     var clickable = el.closest('a, button, [onclick], [role="button"], input, select, [tabindex]');
                     if (clickable) clickable.classList.add('btbf-cursor-hover');
@@ -1215,9 +1296,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun clickAtMouseCursor() {
+        val x = cssCursorX
+        val y = cssCursorY
         val script = """
             (function() {
-                var el = document.elementFromPoint(${mouseCursorX}, ${mouseCursorY});
+                var maxX = window.innerWidth - 10;
+                var maxY = window.innerHeight - 10;
+                var cx = Math.min(${x}, maxX);
+                var cy = Math.min(${y}, maxY);
+                var el = document.elementFromPoint(cx, cy);
                 if (el) {
                     var clickable = el.closest('a, button, [onclick], [role="button"], input, select, [tabindex]');
                     if (clickable) {
@@ -1308,7 +1395,7 @@ class MainActivity : AppCompatActivity() {
             (function() {
                 var style = document.getElementById('btbf-tile-scale');
                 if (style) style.remove();
-                if (${widthPercent} === 100) return; // Standard - keine Änderung nötig
+                if (${widthPercent} === 0) return; // Standard - keine Änderung nötig
 
                 style = document.createElement('style');
                 style.id = 'btbf-tile-scale';
@@ -1444,7 +1531,7 @@ class MainActivity : AppCompatActivity() {
     private fun showTileSizeDialog() {
         // Voreinstellungen: 20% (5 Spalten), 25% (4), 33% (3), 50% (2), 100% (1)
         val sizes = arrayOf("Klein (5 pro Reihe)", "Mittel-Klein (4 pro Reihe)", "Mittel (3 pro Reihe)", "Groß (2 pro Reihe)", "Sehr groß (1 pro Reihe)", "Standard (Website-Layout)")
-        val values = intArrayOf(20, 25, 33, 50, 100, 100)
+        val values = intArrayOf(20, 25, 33, 50, 100, 0)
 
         // Aktuell ausgewählt finden
         val currentIndex = when (tileScalePercent) {
@@ -1452,6 +1539,7 @@ class MainActivity : AppCompatActivity() {
             25 -> 1
             33 -> 2
             50 -> 3
+            100 -> 4
             else -> 5 // Standard
         }
 
