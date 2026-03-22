@@ -1332,9 +1332,9 @@ class MainActivity : AppCompatActivity() {
                     [class*="video-card"],
                     [class*="video-item"],
                     [class*="video_item"] {
-                        width: $colWidth% !important;
-                        max-width: $colWidth% !important;
-                        flex-basis: $colWidth% !important;
+                        width: ${'$'}{colWidth}% !important;
+                        max-width: ${'$'}{colWidth}% !important;
+                        flex-basis: ${'$'}{colWidth}% !important;
                         box-sizing: border-box !important;
                     }
 
