@@ -217,12 +217,8 @@ class MainActivity : AppCompatActivity() {
                 // Kachelgröße anwenden
                 applyTileScale()
 
-                // Maus-Cursor injizieren (immer bereit, aber nur sichtbar wenn aktiv)
+                // Maus-Cursor injizieren (zeigt sich automatisch wenn Maus-Modus aktiv)
                 injectVirtualCursor()
-                // Wenn Maus-Modus aktiv, Cursor sofort zeigen nach Seitennavigation
-                if (isMouseModeActive) {
-                    showCursorAtPosition()
-                }
 
                 // Scroll-Position wiederherstellen wenn vorhanden
                 url?.let { restoreScrollPosition(it) }
@@ -1147,56 +1143,34 @@ class MainActivity : AppCompatActivity() {
     
     // ==================== VIRTUAL MOUSE CURSOR ====================
 
+    /**
+     * Erstellt den Cursor im DOM und zeigt ihn sofort an der letzten Position,
+     * falls der Maus-Modus aktiv ist. Alles in einem einzigen JS-Aufruf.
+     */
     private fun injectVirtualCursor() {
+        val showBlock = if (isMouseModeActive) "block" else "none"
+        val x = cssCursorX
+        val y = cssCursorY
         val cursorScript = """
             (function() {
-                // Alten Cursor entfernen falls vorhanden (nach Seitennavigation)
                 var old = document.getElementById('btbf-cursor');
                 if (old) old.remove();
 
-                const cursor = document.createElement('div');
+                var cursor = document.createElement('div');
                 cursor.id = 'btbf-cursor';
-                cursor.innerHTML = '<div style="position:absolute;top:50%;left:50%;width:8px;height:8px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);"></div>';
-                cursor.style.cssText = `
-                    position: fixed;
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 50%;
-                    background: rgba(229, 9, 20, 0.9);
-                    border: 4px solid #FFD700;
-                    box-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(229, 9, 20, 0.6), inset 0 0 10px rgba(255,255,255,0.3);
-                    z-index: 2147483647;
-                    pointer-events: none;
-                    display: none;
-                    transform: translate(-50%, -50%);
-                    transition: left 0.05s linear, top 0.05s linear;
-                `;
+                cursor.innerHTML = '<div style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);"></div>';
+                cursor.style.cssText = 'position:fixed;width:44px;height:44px;border-radius:50%;background:rgba(229,9,20,0.95);border:4px solid #FFD700;box-shadow:0 0 20px rgba(255,215,0,0.8),0 0 40px rgba(229,9,20,0.6),inset 0 0 10px rgba(255,255,255,0.3);z-index:2147483647;pointer-events:none;transform:translate(-50%,-50%);transition:left 0.05s linear,top 0.05s linear;display:${showBlock};left:${x}px;top:${y}px;';
                 document.body.appendChild(cursor);
 
-                // Fokus-Styling für Element-Navigation
                 var oldStyle = document.getElementById('btbf-nav-style');
                 if (oldStyle) oldStyle.remove();
-                const style = document.createElement('style');
+                var style = document.createElement('style');
                 style.id = 'btbf-nav-style';
-                style.textContent = `
-                    .btbf-cursor-hover {
-                        outline: 3px solid #FFD700 !important;
-                        outline-offset: 2px !important;
-                        box-shadow: 0 0 10px rgba(255, 215, 0, 0.5) !important;
-                    }
-                    :focus {
-                        outline: 3px solid #FFD700 !important;
-                        outline-offset: 3px !important;
-                        box-shadow: 0 0 10px rgba(255, 215, 0, 0.5) !important;
-                    }
-                `;
+                style.textContent = '.btbf-cursor-hover{outline:3px solid #FFD700!important;outline-offset:2px!important;box-shadow:0 0 10px rgba(255,215,0,0.5)!important;}';
                 document.head.appendChild(style);
 
-                // Alle klickbaren Elemente fokussierbar machen
-                document.querySelectorAll('a, button, input, select, [onclick], [role="button"]').forEach(el => {
-                    if (!el.getAttribute('tabindex')) {
-                        el.setAttribute('tabindex', '0');
-                    }
+                document.querySelectorAll('a, button, input, select, [onclick], [role="button"]').forEach(function(el) {
+                    if (!el.getAttribute('tabindex')) el.setAttribute('tabindex', '0');
                 });
             })();
         """.trimIndent()
@@ -1210,19 +1184,47 @@ class MainActivity : AppCompatActivity() {
     private fun toggleMouseMode() {
         isMouseModeActive = !isMouseModeActive
         if (isMouseModeActive) {
-            injectVirtualCursor()
-            // CSS-Viewport-Mitte berechnen
-            webView.evaluateJavascript("JSON.stringify({w: window.innerWidth, h: window.innerHeight})") { result ->
+            // Alles in einem Script: Cursor erstellen + zentrieren + anzeigen
+            webView.evaluateJavascript("""
+                (function() {
+                    // Alten Cursor entfernen falls vorhanden
+                    var old = document.getElementById('btbf-cursor');
+                    if (old) old.remove();
+
+                    // Cursor erstellen
+                    var cursor = document.createElement('div');
+                    cursor.id = 'btbf-cursor';
+                    cursor.innerHTML = '<div style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);"></div>';
+                    cursor.style.cssText = 'position:fixed;width:44px;height:44px;border-radius:50%;background:rgba(229,9,20,0.95);border:4px solid #FFD700;box-shadow:0 0 20px rgba(255,215,0,0.8),0 0 40px rgba(229,9,20,0.6),inset 0 0 10px rgba(255,255,255,0.3);z-index:2147483647;pointer-events:none;transform:translate(-50%,-50%);transition:left 0.05s linear,top 0.05s linear;';
+                    document.body.appendChild(cursor);
+
+                    // Fokus-Styling
+                    var oldStyle = document.getElementById('btbf-nav-style');
+                    if (oldStyle) oldStyle.remove();
+                    var style = document.createElement('style');
+                    style.id = 'btbf-nav-style';
+                    style.textContent = '.btbf-cursor-hover{outline:3px solid #FFD700!important;outline-offset:2px!important;box-shadow:0 0 10px rgba(255,215,0,0.5)!important;}';
+                    document.head.appendChild(style);
+
+                    // Sofort in Mitte anzeigen
+                    var cx = window.innerWidth / 2;
+                    var cy = window.innerHeight / 2;
+                    cursor.style.display = 'block';
+                    cursor.style.left = cx + 'px';
+                    cursor.style.top = cy + 'px';
+
+                    return JSON.stringify({x: cx, y: cy});
+                })();
+            """.trimIndent()) { result ->
                 try {
                     val cleaned = result?.replace("\\\"", "\"")?.trim('"') ?: ""
                     val json = org.json.JSONObject(cleaned)
-                    cssCursorX = json.getInt("w") / 2f
-                    cssCursorY = json.getInt("h") / 2f
+                    cssCursorX = json.getDouble("x").toFloat()
+                    cssCursorY = json.getDouble("y").toFloat()
                 } catch (_: Exception) {
                     cssCursorX = 400f
                     cssCursorY = 300f
                 }
-                showCursorAtPosition()
             }
             Toast.makeText(this, "Maus-Modus AN - D-Pad bewegt Cursor", Toast.LENGTH_SHORT).show()
         } else {
@@ -1230,26 +1232,11 @@ class MainActivity : AppCompatActivity() {
                 (function() {
                     var c = document.getElementById('btbf-cursor');
                     if (c) c.style.display = 'none';
-                    document.querySelectorAll('.btbf-cursor-hover').forEach(el => el.classList.remove('btbf-cursor-hover'));
+                    document.querySelectorAll('.btbf-cursor-hover').forEach(function(el) { el.classList.remove('btbf-cursor-hover'); });
                 })();
             """.trimIndent(), null)
             Toast.makeText(this, "Maus-Modus AUS", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private fun showCursorAtPosition() {
-        val x = cssCursorX
-        val y = cssCursorY
-        webView.evaluateJavascript("""
-            (function() {
-                var c = document.getElementById('btbf-cursor');
-                if (c) {
-                    c.style.display = 'block';
-                    c.style.left = '${x}px';
-                    c.style.top = '${y}px';
-                }
-            })();
-        """.trimIndent(), null)
     }
 
     private fun moveMouseCursor(dx: Int, dy: Int) {
