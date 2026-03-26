@@ -57,9 +57,12 @@ class MainActivity : AppCompatActivity() {
 
     // Maus-Modus Zustand
     private var isMouseModeActive = false
-    private val mouseStepSize = 30 // Pixel pro D-Pad Druck
+    private var cursorX = 0f // Android-Pixel relativ zum WebView
+    private var cursorY = 0f
+    private val cursorStepPx = 20f // Pixel pro D-Pad Druck
 
     // Bottom-Bar Zustand
+    private var isBottomBarVisible = false
     private var isBottomBarFocused = false
 
     // Scroll-Position Speicher (URL -> ScrollY), max 50 Einträge
@@ -107,6 +110,7 @@ class MainActivity : AppCompatActivity() {
         gestureDetector = GestureDetector(this, GestureListener())
 
         setupWebView()
+        setupCursorView()
         setupButtons()
         setupWebViewContextMenu()
 
@@ -217,9 +221,6 @@ class MainActivity : AppCompatActivity() {
                 // Kachelgröße anwenden
                 applyTileScale()
 
-                // Maus-Cursor injizieren (zeigt sich automatisch wenn Maus-Modus aktiv)
-                injectVirtualCursor()
-
                 // Scroll-Position wiederherstellen wenn vorhanden
                 url?.let { restoreScrollPosition(it) }
             }
@@ -263,7 +264,10 @@ class MainActivity : AppCompatActivity() {
 
                 binding.fullscreenContainer.visibility = View.GONE
                 binding.webViewContainer.visibility = View.VISIBLE
-                binding.buttonContainer.visibility = View.VISIBLE
+                // Bottom-Bar nur wieder zeigen wenn sie vorher sichtbar war
+                if (isBottomBarVisible) {
+                    binding.buttonContainer.visibility = View.VISIBLE
+                }
             }
             
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -491,12 +495,36 @@ class MainActivity : AppCompatActivity() {
         }, 3000)
     }
     
-    private fun focusBottomBar() {
+    private fun toggleBottomBar() {
+        if (isBottomBarVisible) {
+            hideBottomBar()
+        } else {
+            showBottomBar()
+        }
+    }
+
+    private fun showBottomBar() {
+        isBottomBarVisible = true
         isBottomBarFocused = true
         binding.buttonContainer.visibility = View.VISIBLE
-        // Ersten Button fokussieren
+        binding.buttonContainer.animate()
+            .translationY(0f)
+            .setDuration(200)
+            .start()
         binding.btnHome.requestFocus()
-        Toast.makeText(this, "Leiste aktiv - Hoch um zurueck", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun hideBottomBar() {
+        isBottomBarVisible = false
+        isBottomBarFocused = false
+        binding.buttonContainer.animate()
+            .translationY(binding.buttonContainer.height.toFloat())
+            .setDuration(200)
+            .withEndAction {
+                binding.buttonContainer.visibility = View.GONE
+            }
+            .start()
+        webView.requestFocus()
     }
 
     private fun hideCategoryBar() {
@@ -602,13 +630,11 @@ class MainActivity : AppCompatActivity() {
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> {
                 if (isMouseModeActive) {
-                    moveMouseCursor(0, -mouseStepSize)
+                    moveMouseCursor(0, -cursorStepPx.toInt())
                     return true
                 }
                 if (isBottomBarFocused) {
-                    // Aus Bottom-Bar zurück zum WebView
-                    isBottomBarFocused = false
-                    webView.requestFocus()
+                    hideBottomBar()
                     return true
                 }
                 if (binding.categoryScroll.visibility == View.GONE) {
@@ -620,7 +646,7 @@ class MainActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if (isMouseModeActive) {
-                    moveMouseCursor(0, mouseStepSize)
+                    moveMouseCursor(0, cursorStepPx.toInt())
                     return true
                 }
                 if (isBottomBarFocused) {
@@ -632,7 +658,7 @@ class MainActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
                 if (isMouseModeActive) {
-                    moveMouseCursor(-mouseStepSize, 0)
+                    moveMouseCursor(-cursorStepPx.toInt(), 0)
                     return true
                 }
                 if (isBottomBarFocused) {
@@ -644,7 +670,7 @@ class MainActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 if (isMouseModeActive) {
-                    moveMouseCursor(mouseStepSize, 0)
+                    moveMouseCursor(cursorStepPx.toInt(), 0)
                     return true
                 }
                 if (isBottomBarFocused) {
@@ -668,6 +694,10 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {
+                if (isBottomBarVisible) {
+                    hideBottomBar()
+                    return true
+                }
                 if (isMouseModeActive) {
                     toggleMouseMode()
                     return true
@@ -681,26 +711,22 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             KeyEvent.KEYCODE_MENU -> {
+                // Hamburger-Button (Fire TV 3 Streifen): Short=Bar toggle, Long=Settings
                 if (event?.repeatCount == 0) {
-                    binding.root.postDelayed({
-                        if (!isMenuLongPress) {
-                            showSettingsMenu()
-                        }
-                        isMenuLongPress = false
-                    }, 500)
+                    event.startTracking()
                 }
                 return true
             }
+            KeyEvent.KEYCODE_INFO -> {
+                // INFO-Taste (normale Fernbedienung): Bottom-Bar ein/ausblenden
+                toggleBottomBar()
+                return true
+            }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                if (isFullScreen) {
-                    webView.evaluateJavascript(
-                        "document.querySelector('video')?.paused ? document.querySelector('video')?.play() : document.querySelector('video')?.pause()",
-                        null
-                    )
-                    return true
-                }
-                // Nicht im Fullscreen: Bottom-Bar fokussieren
-                focusBottomBar()
+                webView.evaluateJavascript(
+                    "document.querySelector('video')?.paused ? document.querySelector('video')?.play() : document.querySelector('video')?.pause()",
+                    null
+                )
                 return true
             }
             KeyEvent.KEYCODE_S -> {
@@ -720,14 +746,27 @@ class MainActivity : AppCompatActivity() {
         return super.onKeyDown(keyCode, event)
     }
     
-    private var isMenuLongPress = false
-    
+    private var menuLongPressed = false
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_MENU -> {
+                if (!menuLongPressed) {
+                    // Kurzer Druck: Bottom-Bar ein/ausblenden
+                    toggleBottomBar()
+                }
+                menuLongPressed = false
+                return true
+            }
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_MENU -> {
-                // Long-Press - Video zu Favoriten hinzufügen
-                isMenuLongPress = true
-                addCurrentVideoToFavorites()
+                menuLongPressed = true
+                showSettingsMenu()
                 return true
             }
         }
@@ -848,10 +887,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showMouseCursorContextMenu() {
-        // Element unter Cursor finden und Kontextmenü zeigen
+        val scale = webView.scale
+        val cssX = (cursorX / scale).toInt()
+        val cssY = (cursorY / scale).toInt()
         webView.evaluateJavascript("""
             (function() {
-                var el = document.elementFromPoint(${cssCursorX}, ${cssCursorY});
+                var el = document.elementFromPoint($cssX, $cssY);
                 if (el) {
                     var link = el.closest('a');
                     if (link) return link.href;
@@ -1141,168 +1182,66 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "Aus Favoriten entfernt", Toast.LENGTH_SHORT).show()
     }
     
-    // ==================== VIRTUAL MOUSE CURSOR ====================
+    // ==================== NATIVER MAUS-CURSOR (Android View Overlay) ====================
 
-    /**
-     * Erstellt den Cursor im DOM und zeigt ihn sofort an der letzten Position,
-     * falls der Maus-Modus aktiv ist. Alles in einem einzigen JS-Aufruf.
-     */
-    private fun injectVirtualCursor() {
-        val showBlock = if (isMouseModeActive) "block" else "none"
-        val x = cssCursorX
-        val y = cssCursorY
-        val cursorScript = """
-            (function() {
-                var old = document.getElementById('btbf-cursor');
-                if (old) old.remove();
-
-                var cursor = document.createElement('div');
-                cursor.id = 'btbf-cursor';
-                cursor.innerHTML = '<div style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);"></div>';
-                cursor.style.cssText = 'position:fixed;width:44px;height:44px;border-radius:50%;background:rgba(229,9,20,0.95);border:4px solid #FFD700;box-shadow:0 0 20px rgba(255,215,0,0.8),0 0 40px rgba(229,9,20,0.6),inset 0 0 10px rgba(255,255,255,0.3);z-index:2147483647;pointer-events:none;transform:translate(-50%,-50%);transition:left 0.05s linear,top 0.05s linear;display:${showBlock};left:${x}px;top:${y}px;';
-                document.body.appendChild(cursor);
-
-                var oldStyle = document.getElementById('btbf-nav-style');
-                if (oldStyle) oldStyle.remove();
-                var style = document.createElement('style');
-                style.id = 'btbf-nav-style';
-                style.textContent = '.btbf-cursor-hover{outline:3px solid #FFD700!important;outline-offset:2px!important;box-shadow:0 0 10px rgba(255,215,0,0.5)!important;}';
-                document.head.appendChild(style);
-
-                document.querySelectorAll('a, button, input, select, [onclick], [role="button"]').forEach(function(el) {
-                    if (!el.getAttribute('tabindex')) el.setAttribute('tabindex', '0');
-                });
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(cursorScript, null)
+    private fun setupCursorView() {
+        binding.cursorView.background = ContextCompat.getDrawable(this, R.drawable.cursor_circle)
+        binding.cursorView.visibility = View.GONE
     }
-
-    // CSS-Pixel Koordinaten des Cursors (nicht Android-Pixel!)
-    private var cssCursorX = 0f
-    private var cssCursorY = 0f
 
     private fun toggleMouseMode() {
         isMouseModeActive = !isMouseModeActive
         if (isMouseModeActive) {
-            // Alles in einem Script: Cursor erstellen + zentrieren + anzeigen
-            webView.evaluateJavascript("""
-                (function() {
-                    // Alten Cursor entfernen falls vorhanden
-                    var old = document.getElementById('btbf-cursor');
-                    if (old) old.remove();
-
-                    // Cursor erstellen
-                    var cursor = document.createElement('div');
-                    cursor.id = 'btbf-cursor';
-                    cursor.innerHTML = '<div style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);"></div>';
-                    cursor.style.cssText = 'position:fixed;width:44px;height:44px;border-radius:50%;background:rgba(229,9,20,0.95);border:4px solid #FFD700;box-shadow:0 0 20px rgba(255,215,0,0.8),0 0 40px rgba(229,9,20,0.6),inset 0 0 10px rgba(255,255,255,0.3);z-index:2147483647;pointer-events:none;transform:translate(-50%,-50%);transition:left 0.05s linear,top 0.05s linear;';
-                    document.body.appendChild(cursor);
-
-                    // Fokus-Styling
-                    var oldStyle = document.getElementById('btbf-nav-style');
-                    if (oldStyle) oldStyle.remove();
-                    var style = document.createElement('style');
-                    style.id = 'btbf-nav-style';
-                    style.textContent = '.btbf-cursor-hover{outline:3px solid #FFD700!important;outline-offset:2px!important;box-shadow:0 0 10px rgba(255,215,0,0.5)!important;}';
-                    document.head.appendChild(style);
-
-                    // Sofort in Mitte anzeigen
-                    var cx = window.innerWidth / 2;
-                    var cy = window.innerHeight / 2;
-                    cursor.style.display = 'block';
-                    cursor.style.left = cx + 'px';
-                    cursor.style.top = cy + 'px';
-
-                    return JSON.stringify({x: cx, y: cy});
-                })();
-            """.trimIndent()) { result ->
-                try {
-                    val cleaned = result?.replace("\\\"", "\"")?.trim('"') ?: ""
-                    val json = org.json.JSONObject(cleaned)
-                    cssCursorX = json.getDouble("x").toFloat()
-                    cssCursorY = json.getDouble("y").toFloat()
-                } catch (_: Exception) {
-                    cssCursorX = 400f
-                    cssCursorY = 300f
-                }
-            }
+            // Cursor in Mitte des WebViews starten
+            cursorX = binding.webViewContainer.width / 2f
+            cursorY = binding.webViewContainer.height / 2f
+            updateCursorViewPosition()
+            binding.cursorView.visibility = View.VISIBLE
             Toast.makeText(this, "Maus-Modus AN - D-Pad bewegt Cursor", Toast.LENGTH_SHORT).show()
         } else {
-            webView.evaluateJavascript("""
-                (function() {
-                    var c = document.getElementById('btbf-cursor');
-                    if (c) c.style.display = 'none';
-                    document.querySelectorAll('.btbf-cursor-hover').forEach(function(el) { el.classList.remove('btbf-cursor-hover'); });
-                })();
-            """.trimIndent(), null)
+            binding.cursorView.visibility = View.GONE
             Toast.makeText(this, "Maus-Modus AUS", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun moveMouseCursor(dx: Int, dy: Int) {
-        // Bewege in CSS-Pixel (step = 15 CSS-Pixel)
-        val cssStep = 15f
-        cssCursorX = (cssCursorX + dx / mouseStepSize.toFloat() * cssStep).coerceAtLeast(0f)
-        cssCursorY = (cssCursorY + dy / mouseStepSize.toFloat() * cssStep).coerceAtLeast(0f)
-
-        updateMouseCursorPositionAndScroll(dx, dy)
+    private fun updateCursorViewPosition() {
+        val w = binding.cursorView.width.toFloat().takeIf { it > 0 } ?: (40 * resources.displayMetrics.density)
+        binding.cursorView.x = cursorX - w / 2f
+        binding.cursorView.y = cursorY - w / 2f
     }
 
-    private fun updateMouseCursorPositionAndScroll(dx: Int, dy: Int) {
-        val x = cssCursorX
-        val y = cssCursorY
-        val scrollMargin = 40
-        val scrollAmount = 100
-        val script = """
-            (function() {
-                var c = document.getElementById('btbf-cursor');
-                if (!c) return;
-                var maxX = window.innerWidth - 10;
-                var maxY = window.innerHeight - 10;
-                var cx = Math.min(${x}, maxX);
-                var cy = Math.min(${y}, maxY);
-                c.style.left = cx + 'px';
-                c.style.top = cy + 'px';
+    private fun moveMouseCursor(dx: Int, dy: Int) {
+        val maxX = binding.webViewContainer.width.toFloat()
+        val maxY = binding.webViewContainer.height.toFloat()
 
-                // Am Rand scrollen
-                if (cy <= ${scrollMargin} && ${dy} < 0) window.scrollBy(0, -${scrollAmount});
-                if (cy >= maxY - ${scrollMargin} && ${dy} > 0) window.scrollBy(0, ${scrollAmount});
-                if (cx <= ${scrollMargin} && ${dx} < 0) window.scrollBy(-${scrollAmount}, 0);
-                if (cx >= maxX - ${scrollMargin} && ${dx} > 0) window.scrollBy(${scrollAmount}, 0);
+        cursorX = (cursorX + dx).coerceIn(0f, maxX)
+        cursorY = (cursorY + dy).coerceIn(0f, maxY)
+        updateCursorViewPosition()
 
-                // Highlight Element unter Cursor
-                document.querySelectorAll('.btbf-cursor-hover').forEach(el => el.classList.remove('btbf-cursor-hover'));
-                var el = document.elementFromPoint(cx, cy);
-                if (el) {
-                    var clickable = el.closest('a, button, [onclick], [role="button"], input, select, [tabindex]');
-                    if (clickable) clickable.classList.add('btbf-cursor-hover');
-                }
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(script, null)
+        // Am Rand scrollen
+        val scrollMargin = 50f
+        if (cursorY < scrollMargin && dy < 0) scrollWebView("up", 100)
+        if (cursorY > maxY - scrollMargin && dy > 0) scrollWebView("down", 100)
+        if (cursorX < scrollMargin && dx < 0) scrollWebView("left", 100)
+        if (cursorX > maxX - scrollMargin && dx > 0) scrollWebView("right", 100)
     }
 
     private fun clickAtMouseCursor() {
-        val x = cssCursorX
-        val y = cssCursorY
-        val script = """
+        // Android-Pixel in CSS-Pixel umrechnen (WebView scale beachten)
+        val scale = webView.scale
+        val cssX = (cursorX / scale).toInt()
+        val cssY = (cursorY / scale).toInt()
+
+        webView.evaluateJavascript("""
             (function() {
-                var maxX = window.innerWidth - 10;
-                var maxY = window.innerHeight - 10;
-                var cx = Math.min(${x}, maxX);
-                var cy = Math.min(${y}, maxY);
-                var el = document.elementFromPoint(cx, cy);
+                var el = document.elementFromPoint($cssX, $cssY);
                 if (el) {
                     var clickable = el.closest('a, button, [onclick], [role="button"], input, select, [tabindex]');
-                    if (clickable) {
-                        clickable.click();
-                    } else {
-                        el.click();
-                    }
+                    if (clickable) clickable.click();
+                    else el.click();
                 }
             })();
-        """.trimIndent()
-        webView.evaluateJavascript(script, null)
+        """.trimIndent(), null)
     }
 
     // ==================== SMART BACK NAVIGATION ====================

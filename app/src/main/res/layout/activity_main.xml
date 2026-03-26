@@ -12,15 +12,24 @@
         android:id="@+id/webViewContainer"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        app:layout_constraintBottom_toTopOf="@id/buttonContainer"
+        app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/categoryScroll">
+        app:layout_constraintTop_toTopOf="parent">
 
         <WebView
             android:id="@+id/webView"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <!-- Nativer Maus-Cursor Overlay -->
+        <View
+            android:id="@+id/cursorView"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:visibility="gone"
+            android:elevation="100dp" />
+
     </FrameLayout>
 
     <!-- Fullscreen Container für Video -->
@@ -122,7 +131,7 @@
         </LinearLayout>
     </HorizontalScrollView>
 
-    <!-- Button Container für Navigation (scrollbar) -->
+    <!-- Button Container für Navigation (scrollbar) - initial versteckt -->
     <HorizontalScrollView
         android:id="@+id/buttonContainer"
         android:layout_width="0dp"
@@ -130,6 +139,7 @@
         android:background="#CC000000"
         android:fillViewport="true"
         android:scrollbars="none"
+        android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
