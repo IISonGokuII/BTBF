@@ -57,13 +57,12 @@ class MainActivity : AppCompatActivity() {
 
     // Maus-Modus Zustand
     private var isMouseModeActive = false
-    private var cursorX = 0f // Android-Pixel relativ zum WebView
+    private var cursorX = 0f
     private var cursorY = 0f
-    private val cursorStepPx = 20f // Pixel pro D-Pad Druck
+    private val cursorStep = 20f
 
     // Bottom-Bar Zustand
     private var isBottomBarVisible = false
-    private var isBottomBarFocused = false
 
     // Scroll-Position Speicher (URL -> ScrollY), max 50 Einträge
     private val scrollPositionMap = object : LinkedHashMap<String, Int>(50, 0.75f, true) {
@@ -393,24 +392,9 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupButtons() {
-        // Bottom-Bar Focus-Tracking: Wenn Fokus die Bar verlässt, zurücksetzen
-        val barButtons = listOf(
-            binding.btnHome, binding.btnBack, binding.btnRefresh, binding.btnSearch,
-            binding.btnDownload, binding.btnFullscreen, binding.btnFavorites, binding.btnSettings
-        )
-        barButtons.forEach { btn ->
-            btn.setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus) {
-                    isBottomBarFocused = true
-                }
-            }
-        }
-
-        // === HAUPT-NAVIGATION ===
-
         // Home Button
         binding.btnHome.setOnClickListener {
-            isBottomBarFocused = false
+            hideBottomBar()
             webView.loadUrl(websiteUrl)
         }
 
@@ -436,9 +420,9 @@ class MainActivity : AppCompatActivity() {
             toggleFullscreen()
         }
 
-        // Back Button im Button Container
+        // Back Button
         binding.btnBack.setOnClickListener {
-            isBottomBarFocused = false
+            hideBottomBar()
             navigateBack()
         }
         
@@ -496,33 +480,24 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun toggleBottomBar() {
-        if (isBottomBarVisible) {
-            hideBottomBar()
-        } else {
-            showBottomBar()
-        }
+        if (isBottomBarVisible) hideBottomBar() else showBottomBar()
     }
 
     private fun showBottomBar() {
         isBottomBarVisible = true
-        isBottomBarFocused = true
         binding.buttonContainer.visibility = View.VISIBLE
-        binding.buttonContainer.animate()
-            .translationY(0f)
-            .setDuration(200)
-            .start()
+        binding.buttonContainer.translationY = binding.buttonContainer.height.toFloat()
+        binding.buttonContainer.animate().translationY(0f).setDuration(200).start()
         binding.btnHome.requestFocus()
     }
 
     private fun hideBottomBar() {
+        if (!isBottomBarVisible) return
         isBottomBarVisible = false
-        isBottomBarFocused = false
         binding.buttonContainer.animate()
             .translationY(binding.buttonContainer.height.toFloat())
             .setDuration(200)
-            .withEndAction {
-                binding.buttonContainer.visibility = View.GONE
-            }
+            .withEndAction { binding.buttonContainer.visibility = View.GONE }
             .start()
         webView.requestFocus()
     }
@@ -625,103 +600,92 @@ class MainActivity : AppCompatActivity() {
         controller.show(WindowInsetsCompat.Type.systemBars())
     }
 
+    // =================================================================
+    // FERNBEDIENUNG KEY-HANDLING
+    // =================================================================
+    //
+    // Tasten-Belegung:
+    //   MENU / Hamburger (3 Streifen):  Bottom-Bar ein/ausblenden
+    //   INFO (normale FB):              Bottom-Bar ein/ausblenden
+    //   D-Pad:                          Navigation / Maus bewegen
+    //   Center/Enter kurz:              Klick (Maus oder fokussiertes Element)
+    //   Center/Enter lang:              Kontextmenü
+    //   BACK:                           Schließt Bar > Maus aus > Zurück
+    //   Play/Pause:                     Video play/pause
+    //   M:                              Maus-Modus toggle
+    //
+    // Bottom-Bar: Wenn sichtbar, D-Pad navigiert innerhalb der Buttons.
+    // Maus-Modus: D-Pad bewegt den Cursor, Center klickt.
+    // Normal:     D-Pad scrollt / navigiert Elemente.
+    // =================================================================
+
+    private fun isBarButtonFocused(): Boolean {
+        val focused = currentFocus ?: return false
+        return focused == binding.btnHome || focused == binding.btnBack ||
+               focused == binding.btnRefresh || focused == binding.btnSearch ||
+               focused == binding.btnDownload || focused == binding.btnFullscreen ||
+               focused == binding.btnFavorites || focused == binding.btnSettings
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        // FireTV Fernbedienung Navigation
         when (keyCode) {
+            // ---- MENU / INFO -> Bottom-Bar toggle ----
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_INFO -> {
+                toggleBottomBar()
+                return true
+            }
+
+            // ---- D-PAD ----
             KeyEvent.KEYCODE_DPAD_UP -> {
-                if (isMouseModeActive) {
-                    moveMouseCursor(0, -cursorStepPx.toInt())
-                    return true
-                }
-                if (isBottomBarFocused) {
-                    hideBottomBar()
-                    return true
-                }
-                if (binding.categoryScroll.visibility == View.GONE) {
-                    navigateToPreviousElement()
-                } else {
-                    showCategoryBar()
-                }
+                if (isMouseModeActive) { moveMouseCursor(0, -cursorStep.toInt()); return true }
+                if (isBarButtonFocused()) { hideBottomBar(); return true }
+                scrollWebView("up", 300)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (isMouseModeActive) {
-                    moveMouseCursor(0, cursorStepPx.toInt())
-                    return true
-                }
-                if (isBottomBarFocused) {
-                    // In Bottom-Bar: native Fokus-Navigation zulassen
-                    return super.onKeyDown(keyCode, event)
-                }
-                navigateToNextElement()
+                if (isMouseModeActive) { moveMouseCursor(0, cursorStep.toInt()); return true }
+                if (isBarButtonFocused()) return super.onKeyDown(keyCode, event)
+                scrollWebView("down", 300)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (isMouseModeActive) {
-                    moveMouseCursor(-cursorStepPx.toInt(), 0)
-                    return true
-                }
-                if (isBottomBarFocused) {
-                    // In Bottom-Bar: native Fokus-Navigation zulassen
-                    return super.onKeyDown(keyCode, event)
-                }
+                if (isMouseModeActive) { moveMouseCursor(-cursorStep.toInt(), 0); return true }
+                if (isBarButtonFocused()) return super.onKeyDown(keyCode, event)
                 scrollWebView("left", 200)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (isMouseModeActive) {
-                    moveMouseCursor(cursorStepPx.toInt(), 0)
-                    return true
-                }
-                if (isBottomBarFocused) {
-                    // In Bottom-Bar: native Fokus-Navigation zulassen
-                    return super.onKeyDown(keyCode, event)
-                }
+                if (isMouseModeActive) { moveMouseCursor(cursorStep.toInt(), 0); return true }
+                if (isBarButtonFocused()) return super.onKeyDown(keyCode, event)
                 scrollWebView("right", 200)
                 return true
             }
+
+            // ---- CENTER / ENTER ----
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER -> {
-                if (isMouseModeActive) {
-                    clickAtMouseCursor()
-                    return true
+                if (isBarButtonFocused()) return super.onKeyDown(keyCode, event)
+                // Long-Press tracken fuer Kontextmenue
+                if (event?.repeatCount == 0) event.startTracking()
+                if (event != null && event.repeatCount == 0) {
+                    // Kurzer Klick wird in onKeyUp verarbeitet
                 }
-                if (isBottomBarFocused) {
-                    // In Bottom-Bar: native Klick zulassen
-                    return super.onKeyDown(keyCode, event)
-                }
-                clickFocusedElement()
                 return true
             }
+
+            // ---- BACK ----
             KeyEvent.KEYCODE_BACK -> {
-                if (isBottomBarVisible) {
-                    hideBottomBar()
-                    return true
-                }
-                if (isMouseModeActive) {
-                    toggleMouseMode()
-                    return true
-                }
+                if (isBottomBarVisible) { hideBottomBar(); return true }
+                if (isMouseModeActive) { toggleMouseMode(); return true }
                 if (isFullScreen) {
                     webView.evaluateJavascript("document.exitFullscreen();", null)
                     return true
                 }
-                if (navigateBack()) {
-                    return true
-                }
+                if (navigateBack()) return true
             }
-            KeyEvent.KEYCODE_MENU -> {
-                // Hamburger-Button (Fire TV 3 Streifen): Short=Bar toggle, Long=Settings
-                if (event?.repeatCount == 0) {
-                    event.startTracking()
-                }
-                return true
-            }
-            KeyEvent.KEYCODE_INFO -> {
-                // INFO-Taste (normale Fernbedienung): Bottom-Bar ein/ausblenden
-                toggleBottomBar()
-                return true
-            }
+
+            // ---- MEDIA ----
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 webView.evaluateJavascript(
                     "document.querySelector('video')?.paused ? document.querySelector('video')?.play() : document.querySelector('video')?.pause()",
@@ -729,33 +693,31 @@ class MainActivity : AppCompatActivity() {
                 )
                 return true
             }
-            KeyEvent.KEYCODE_S -> {
-                scrollWebView("down", 500)
-                return true
-            }
-            KeyEvent.KEYCODE_W -> {
-                scrollWebView("up", 500)
-                return true
-            }
-            KeyEvent.KEYCODE_M -> {
-                // M-Taste = Maus-Modus umschalten
-                toggleMouseMode()
-                return true
-            }
+
+            // ---- Tastatur-Shortcuts ----
+            KeyEvent.KEYCODE_M -> { toggleMouseMode(); return true }
+            KeyEvent.KEYCODE_S -> { scrollWebView("down", 500); return true }
+            KeyEvent.KEYCODE_W -> { scrollWebView("up", 500); return true }
         }
         return super.onKeyDown(keyCode, event)
     }
-    
-    private var menuLongPressed = false
+
+    private var centerLongPressed = false
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
-            KeyEvent.KEYCODE_MENU -> {
-                if (!menuLongPressed) {
-                    // Kurzer Druck: Bottom-Bar ein/ausblenden
-                    toggleBottomBar()
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER -> {
+                if (centerLongPressed) {
+                    centerLongPressed = false
+                    return true
                 }
-                menuLongPressed = false
+                // Kurzer Druck = Klick
+                if (isMouseModeActive) {
+                    clickAtMouseCursor()
+                } else {
+                    clickFocusedElement()
+                }
                 return true
             }
         }
@@ -764,9 +726,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
-            KeyEvent.KEYCODE_MENU -> {
-                menuLongPressed = true
-                showSettingsMenu()
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER -> {
+                // Langer Druck = Kontextmenü
+                centerLongPressed = true
+                if (isMouseModeActive) {
+                    showMouseCursorContextMenu()
+                } else {
+                    showVideoContextMenu(webView.url)
+                }
                 return true
             }
         }
