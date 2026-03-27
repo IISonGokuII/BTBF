@@ -39,6 +39,7 @@ import android.widget.ArrayAdapter
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
@@ -1397,24 +1398,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showQuickActionsDialog() {
+        if (isFinishing) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return
         val items = arrayOf(
             getString(R.string.quick_action_change_source),
             getString(R.string.quick_action_mouse),
             getString(R.string.quick_action_play)
         )
-        AlertDialog.Builder(this)
-            .setTitle(R.string.quick_actions_title)
-            .setItems(items) { _, which ->
-                hideNavBar()
-                hideCategoryBar()
-                when (which) {
-                    0 -> showSiteSelectorAgain()
-                    1 -> togglePointerModeFromToolbar()
-                    2 -> manualPlayVideo()
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        // MaterialComponents-Theme + AlertDialog.Builder crasht auf manchen TV-Geraeten; nach Main-Loop zeigen.
+        handler.post {
+            if (isFinishing) return@post
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return@post
+            try {
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.quick_actions_title)
+                    .setItems(items) { _, which ->
+                        hideNavBar()
+                        hideCategoryBar()
+                        when (which) {
+                            0 -> showSiteSelectorAgain()
+                            1 -> togglePointerModeFromToolbar()
+                            2 -> manualPlayVideo()
+                        }
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            } catch (_: Exception) { /* defensive: kein Absturz bei Dialog-Inflate */ }
+        }
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
