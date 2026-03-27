@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -18,6 +19,8 @@ import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.DecelerateInterpolator
@@ -28,13 +31,17 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import com.btbf.app.site.SitePlugin
+import com.btbf.app.site.SitePluginRegistry
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ArrayAdapter
 import android.widget.Toast
-import androidx.annotation.StringRes
+import org.json.JSONArray
+import org.json.JSONObject
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -44,6 +51,7 @@ import com.btbf.app.databinding.DialogFavoritesBinding
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.min
 
 class MainActivity : AppCompatActivity() {
 
@@ -56,20 +64,8 @@ class MainActivity : AppCompatActivity() {
     private var isCategoryVisible = false
     private var isSplashVisible = true
 
-    // Site-Konfiguration
-    private data class SiteConfig(
-        val name: String,
-        val url: String,
-        val domain: String,
-        @StringRes val subtitleRes: Int
-    )
-    private val sites = listOf(
-        SiteConfig("BTBF", "https://de.borntobefuck.com/", "borntobefuck", R.string.site_btbf_sub),
-        SiteConfig("CamCaps", "https://camcaps.tv/", "camcaps.tv", R.string.site_camcaps_sub),
-        SiteConfig("FyxXR", "https://fyxxr.com/", "fyxxr.com", R.string.site_fyxxr_sub),
-        SiteConfig("SheeshFans", "https://sheeshfans.com/", "sheeshfans.com", R.string.site_sheesh_sub),
-        SiteConfig("LeakPorner", "https://leakporner.com/", "leakporner.com", R.string.site_leakporner_sub)
-    )
+    /** Aktuelle Quelle (WebView-UA, optionale JS-Hooks). */
+    private var activeSitePlugin: SitePlugin? = null
     private var websiteUrl = ""
     private var currentSiteDomain = ""
     private val storagePermissionCode = 100
@@ -77,11 +73,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var videoDownloadHelper: VideoDownloadHelper
     private lateinit var gestureDetector: GestureDetector
     private val handler = Handler(Looper.getMainLooper())
+    private val trackedDownloadIds = mutableSetOf<Long>()
+    private var autoPlayRunnable: Runnable? = null
 
     /** Fire-TV: virtueller Mauszeiger statt nur Fokus-Scroll */
     private var pointerMode = false
     private var pointerX = 0f
     private var pointerY = 0f
+
+    private val mainPrefs by lazy { getSharedPreferences("btbf_main", Context.MODE_PRIVATE) }
+    private var siteGridColumns = 1
+    /** 0 Standard 100%, 1–4 kleiner bis 65% — WebView-Seite wirkt kleiner (mehr auf einmal). */
+    private var webViewDensityMode = 0
 
     // Video-URL Tracking (direkte + Stream URLs)
     private val capturedDirectUrls = mutableListOf<String>()
@@ -131,14 +134,55 @@ class MainActivity : AppCompatActivity() {
     // ==================== SITE SELECTOR ====================
 
     private fun setupSiteSelector() {
-        val items = sites.map { s ->
-            SitePickerItem(s.name, s.url, getString(s.subtitleRes))
+        loadSiteGridPref()
+        loadWebViewDensityPref()
+        setupSiteLayoutModeButtons()
+        applySitePickerLayout()
+        updateSiteLayoutButtonSelection()
+        updateWebDensityButtonSelection()
+    }
+
+    private fun loadSiteGridPref() {
+        siteGridColumns = mainPrefs.getInt(PREF_SITE_GRID_COLUMNS, 1).coerceIn(1, 3)
+    }
+
+    private fun setupSiteLayoutModeButtons() {
+        binding.btnSiteLayoutList.setOnClickListener { setSiteGridColumns(1) }
+        binding.btnSiteLayout2.setOnClickListener { setSiteGridColumns(2) }
+        binding.btnSiteLayout3.setOnClickListener { setSiteGridColumns(3) }
+    }
+
+    private fun setSiteGridColumns(cols: Int) {
+        siteGridColumns = cols.coerceIn(1, 3)
+        mainPrefs.edit().putInt(PREF_SITE_GRID_COLUMNS, siteGridColumns).apply()
+        applySitePickerLayout()
+        updateSiteLayoutButtonSelection()
+    }
+
+    private fun updateSiteLayoutButtonSelection() {
+        val accent = ContextCompat.getColor(this, R.color.colorPrimary)
+        val normal = ContextCompat.getColor(this, R.color.chip_stroke)
+        listOf(binding.btnSiteLayoutList, binding.btnSiteLayout2, binding.btnSiteLayout3).forEach {
+            it.strokeColor = ColorStateList.valueOf(normal)
         }
-        binding.rvSitePicker.layoutManager = LinearLayoutManager(this)
+        when (siteGridColumns) {
+            1 -> binding.btnSiteLayoutList.strokeColor = ColorStateList.valueOf(accent)
+            2 -> binding.btnSiteLayout2.strokeColor = ColorStateList.valueOf(accent)
+            else -> binding.btnSiteLayout3.strokeColor = ColorStateList.valueOf(accent)
+        }
+    }
+
+    private fun applySitePickerLayout() {
+        val siteItems = SitePluginRegistry.plugins.map { p ->
+            SitePickerItem(p.displayName, p.baseUrl, getString(p.subtitleRes))
+        }
+        binding.rvSitePicker.layoutManager = if (siteGridColumns <= 1) {
+            LinearLayoutManager(this)
+        } else {
+            GridLayoutManager(this, siteGridColumns)
+        }
         binding.rvSitePicker.setHasFixedSize(true)
-        binding.rvSitePicker.adapter = SitePickerAdapter(items) { site ->
-            openSiteInWebView(site)
-        }
+        binding.rvSitePicker.adapter = SitePickerAdapter(siteItems, siteGridColumns) { openSiteInWebView(it) }
         binding.rvSitePicker.post {
             binding.rvSitePicker.getChildAt(0)?.requestFocus()
         }
@@ -146,15 +190,19 @@ class MainActivity : AppCompatActivity() {
 
     /** Native BrowseActivity entfällt: gewählte Site direkt in der WebView laden. */
     private fun openSiteInWebView(item: SitePickerItem) {
-        val cfg = sites.firstOrNull { it.url == item.url } ?: return
-        websiteUrl = cfg.url
-        currentSiteDomain = cfg.domain
-        binding.loadingSiteName.text = cfg.name
+        val plugin = SitePluginRegistry.byBaseUrl(item.url) ?: return
+        activeSitePlugin = plugin
+        websiteUrl = plugin.baseUrl
+        currentSiteDomain = plugin.domainMatch
+        binding.loadingSiteName.text = plugin.displayName
         binding.siteSelector.visibility = View.GONE
         binding.loadingIndicator.visibility = View.VISIBLE
         if (::webView.isInitialized) {
+            webView.isFocusable = true
+            webView.isFocusableInTouchMode = true
+            applyWebViewPluginUserAgent()
             webView.stopLoading()
-            webView.loadUrl(cfg.url)
+            webView.loadUrl(plugin.baseUrl)
         } else {
             setupWebView()
         }
@@ -171,6 +219,12 @@ class MainActivity : AppCompatActivity() {
         if (!::webView.isInitialized || isFullScreen || isSplashVisible) return
         pointerMode = true
         binding.virtualCursor.visibility = View.VISIBLE
+        webView.clearFocus()
+        webView.isFocusable = false
+        webView.isFocusableInTouchMode = false
+        binding.webViewContainer.isFocusable = true
+        binding.webViewContainer.isFocusableInTouchMode = true
+        binding.webViewContainer.requestFocus()
         webView.post {
             val w = webView.width.toFloat()
             val h = webView.height.toFloat()
@@ -186,6 +240,10 @@ class MainActivity : AppCompatActivity() {
     private fun disablePointerMode() {
         pointerMode = false
         binding.virtualCursor.visibility = View.GONE
+        if (::webView.isInitialized) {
+            webView.isFocusable = true
+            webView.isFocusableInTouchMode = true
+        }
     }
 
     private fun movePointer(dx: Float, dy: Float) {
@@ -206,14 +264,27 @@ class MainActivity : AppCompatActivity() {
         binding.virtualCursor.translationY = pointerY - half
     }
 
+    @Suppress("DEPRECATION")
     private fun injectPointerClick() {
         if (!::webView.isInitialized) return
-        val t = SystemClock.uptimeMillis()
-        MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, pointerX, pointerY, 0).apply {
+        val downTime = SystemClock.uptimeMillis()
+        val metaState = 0
+        val pressure = 1f
+        val size = 1f
+        val precision = 1f
+        val deviceId = 0
+        val edgeFlags = 0
+        MotionEvent.obtain(
+            downTime, downTime, MotionEvent.ACTION_DOWN,
+            pointerX, pointerY, pressure, size, metaState, precision, precision, deviceId, edgeFlags
+        ).apply {
             webView.dispatchTouchEvent(this)
             recycle()
         }
-        MotionEvent.obtain(t, t + 60, MotionEvent.ACTION_UP, pointerX, pointerY, 0).apply {
+        MotionEvent.obtain(
+            downTime, downTime + 60, MotionEvent.ACTION_UP,
+            pointerX, pointerY, pressure, size, metaState, precision, precision, deviceId, edgeFlags
+        ).apply {
             webView.dispatchTouchEvent(this)
             recycle()
         }
@@ -244,7 +315,37 @@ class MainActivity : AppCompatActivity() {
 
     // ==================== WEBVIEW ====================
 
-    private fun setupWebView() {
+    /** Lädt eine beliebige http(s)-URL und setzt [currentSiteDomain] passend (z. B. Favoriten). */
+    private fun loadUrlInWebView(url: String) {
+        val uri = Uri.parse(url)
+        val host = uri.host ?: return
+        val scheme = uri.scheme ?: "https"
+        activeSitePlugin = SitePluginRegistry.byHost(host)
+            ?: SitePluginRegistry.genericFallback(host, "$scheme://$host/")
+        currentSiteDomain = activeSitePlugin!!.domainMatch
+        websiteUrl = "$scheme://$host/"
+        binding.siteSelector.visibility = View.GONE
+        binding.splashOverlay.visibility = View.GONE
+        isSplashVisible = false
+        binding.loadingIndicator.visibility = View.GONE
+        binding.bottomNavStack.visibility = View.GONE
+        binding.topBarContainer.visibility = View.GONE
+        if (::webView.isInitialized) {
+            applyWebViewPluginUserAgent()
+            webView.stopLoading()
+            webView.loadUrl(url)
+        } else {
+            setupWebView(initialLoadUrl = url)
+        }
+    }
+
+    private fun applyWebViewPluginUserAgent() {
+        if (!::webView.isInitialized) return
+        val base = WebSettings.getDefaultUserAgent(this).replace("; wv", "")
+        webView.settings.userAgentString = activeSitePlugin?.webViewUserAgent(base) ?: base
+    }
+
+    private fun setupWebView(initialLoadUrl: String? = null) {
         webView = binding.webView
 
         webView.settings.apply {
@@ -262,8 +363,9 @@ class MainActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             databaseEnabled = true
             layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-            userAgentString = userAgentString.replace("; wv", "")
         }
+        applyWebViewPluginUserAgent()
+        webView.settings.textZoom = zoomParamsForDensityMode(webViewDensityMode).second
 
         // Hardware-Beschleunigung fuer bessere Scroll-Performance
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -293,6 +395,7 @@ class MainActivity : AppCompatActivity() {
                 if (videoDownloadHelper.isDirectVideoUrl(url)) {
                     synchronized(capturedDirectUrls) {
                         if (!capturedDirectUrls.contains(url)) capturedDirectUrls.add(url)
+                        while (capturedDirectUrls.size > MAX_CAPTURED_URLS) capturedDirectUrls.removeAt(0)
                     }
                 }
 
@@ -300,6 +403,7 @@ class MainActivity : AppCompatActivity() {
                 if (videoDownloadHelper.isStreamUrl(url)) {
                     synchronized(capturedStreamUrls) {
                         if (!capturedStreamUrls.contains(url)) capturedStreamUrls.add(url)
+                        while (capturedStreamUrls.size > MAX_CAPTURED_URLS) capturedStreamUrls.removeAt(0)
                     }
                 }
 
@@ -318,9 +422,43 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 binding.progressBar.visibility = View.GONE
                 binding.loadingIndicator.visibility = View.GONE
+
+                // Site-Picker sichtbar (z. B. nach „Start“): kein JS injizieren / kein Autoplay — sonst
+                // feuert Logik auf about:blank und der Zurück-Stapel kann die letzte Seite wieder laden.
+                if (binding.siteSelector.visibility == View.VISIBLE) {
+                    if (url == "about:blank" && view != null) {
+                        view.clearHistory()
+                    }
+                    // Kein dismissSplash(): Quellenwahl liegt im splashOverlay — sonst wuerde die UI verschwinden.
+                    return
+                }
+
                 injectComfortScripts()
                 injectVideoClickInterceptor()
                 autoPlayVideo()
+                applyWebViewPageZoom()
+
+                url?.let { pageUrl ->
+                    try {
+                        val h = Uri.parse(pageUrl).host
+                        if (h != null && activeSitePlugin != null) {
+                            val plug = SitePluginRegistry.byHost(h)
+                            if (plug?.id == activeSitePlugin?.id) {
+                                activeSitePlugin?.onPageReadyInjectJs(webView, pageUrl)?.let { js ->
+                                    webView.evaluateJavascript(js, null)
+                                }
+                            }
+                        }
+                    } catch (_: Exception) { }
+                }
+
+                webView.post {
+                    if (!isFullScreen && !pointerMode && binding.siteSelector.visibility != View.VISIBLE) {
+                        webView.isFocusable = true
+                        webView.isFocusableInTouchMode = true
+                        webView.requestFocus()
+                    }
+                }
 
                 if (isSplashVisible) {
                     handler.postDelayed({ dismissSplash() }, 800)
@@ -358,12 +496,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
-            videoDownloadHelper.downloadDirect(url, webView.url ?: websiteUrl, userAgent, contentDisposition, mimetype)
+            val id = videoDownloadHelper.downloadDirect(url, webView.url ?: websiteUrl, userAgent, contentDisposition, mimetype)
+            trackedDownloadIds.add(id)
             Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
         }
 
         webView.addJavascriptInterface(WebAppInterface(this), "AndroidInterface")
-        webView.loadUrl(websiteUrl)
+        webView.loadUrl(initialLoadUrl ?: websiteUrl)
     }
 
     // ==================== SPLASH SCREEN ====================
@@ -376,7 +515,14 @@ class MainActivity : AppCompatActivity() {
             .alpha(0f)
             .setDuration(500)
             .setInterpolator(AccelerateDecelerateInterpolator())
-            .withEndAction { binding.splashOverlay.visibility = View.GONE }
+            .withEndAction {
+                binding.splashOverlay.visibility = View.GONE
+                if (::webView.isInitialized) {
+                    webView.isFocusable = true
+                    webView.isFocusableInTouchMode = true
+                    webView.post { webView.requestFocus() }
+                }
+            }
             .start()
 
         showHelpOverlay()
@@ -402,18 +548,21 @@ class MainActivity : AppCompatActivity() {
         if (isFullScreen || isSplashVisible) return
         if (!isNavVisible) {
             isNavVisible = true
-            binding.buttonContainer.visibility = View.VISIBLE
-            binding.buttonContainer.alpha = 0f
-            binding.buttonContainer.translationY = 60f
-            binding.buttonContainer.animate()
+            binding.bottomNavStack.visibility = View.VISIBLE
+            binding.bottomNavStack.alpha = 0f
+            binding.bottomNavStack.translationY = 60f
+            binding.bottomNavStack.animate()
                 .alpha(1f)
                 .translationY(0f)
                 .setDuration(250)
                 .setInterpolator(DecelerateInterpolator())
+                .withEndAction {
+                    binding.bottomNavStack.post { binding.btnHome.requestFocus() }
+                }
                 .start()
+        } else {
+            binding.bottomNavStack.post { binding.btnHome.requestFocus() }
         }
-        // Focus auf ersten Button setzen (FireTV)
-        binding.btnHome.requestFocus()
         // Auto-Hide Timer zuruecksetzen
         handler.removeCallbacks(hideNavRunnable)
         handler.postDelayed(hideNavRunnable, NAV_AUTO_HIDE_MS)
@@ -423,11 +572,11 @@ class MainActivity : AppCompatActivity() {
         if (!isNavVisible) return
         isNavVisible = false
         handler.removeCallbacks(hideNavRunnable)
-        binding.buttonContainer.animate()
+        binding.bottomNavStack.animate()
             .alpha(0f)
             .translationY(60f)
             .setDuration(200)
-            .withEndAction { binding.buttonContainer.visibility = View.GONE }
+            .withEndAction { binding.bottomNavStack.visibility = View.GONE }
             .start()
     }
 
@@ -485,6 +634,89 @@ class MainActivity : AppCompatActivity() {
         binding.btnCatNew.setOnClickListener { webView.loadUrl("${websiteUrl}new"); hideCategoryBar() }
         binding.btnCatTop.setOnClickListener { webView.loadUrl("${websiteUrl}top"); hideCategoryBar() }
         binding.btnCatRandom.setOnClickListener { webView.loadUrl("${websiteUrl}random"); hideCategoryBar() }
+
+        setupWebDensityButtons()
+    }
+
+    private fun loadWebViewDensityPref() {
+        if (mainPrefs.contains(PREF_WEBVIEW_DENSITY_V2)) {
+            webViewDensityMode = mainPrefs.getInt(PREF_WEBVIEW_DENSITY_V2, 0).coerceIn(0, 4)
+            return
+        }
+        val old = mainPrefs.getInt(PREF_WEBVIEW_DENSITY, 0)
+        webViewDensityMode = when (old) {
+            0, 1 -> 0
+            2 -> 1
+            3 -> 2
+            4 -> 3
+            else -> 0
+        }
+        mainPrefs.edit().putInt(PREF_WEBVIEW_DENSITY_V2, webViewDensityMode).apply()
+    }
+
+    private fun setWebViewDensityMode(mode: Int) {
+        webViewDensityMode = mode.coerceIn(0, 4)
+        mainPrefs.edit().putInt(PREF_WEBVIEW_DENSITY_V2, webViewDensityMode).apply()
+        updateWebDensityButtonSelection()
+        applyWebViewPageZoom()
+    }
+
+    /** 0 Standard 100%, 1–4 zunehmend kleiner; letzte Stufe 65%. */
+    private fun zoomParamsForDensityMode(mode: Int): Pair<Int, Int> = when (mode) {
+        0 -> 100 to 100
+        1 -> 92 to 94
+        2 -> 85 to 88
+        3 -> 75 to 80
+        4 -> 65 to 72
+        else -> 100 to 100
+    }
+
+    /** CSS zoom + TextZoom — wirkt auf die meisten Seiten; kein natives Raster wie BrowseActivity. */
+    private fun applyWebViewPageZoom() {
+        if (!::webView.isInitialized) return
+        val (zoomPct, textZoom) = zoomParamsForDensityMode(webViewDensityMode)
+        webView.settings.textZoom = textZoom
+        val z = zoomPct
+        webView.evaluateJavascript(
+            """
+            (function(){
+                var s = '$z%';
+                try { document.documentElement.style.zoom = s; } catch(e1) {}
+                try { if (document.body) document.body.style.zoom = s; } catch(e2) {}
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    private fun setupWebDensityButtons() {
+        binding.btnWebDensityStandard.setOnClickListener { setWebViewDensityMode(0) }
+        binding.btnWebDensity92.setOnClickListener { setWebViewDensityMode(1) }
+        binding.btnWebDensity85.setOnClickListener { setWebViewDensityMode(2) }
+        binding.btnWebDensity75.setOnClickListener { setWebViewDensityMode(3) }
+        binding.btnWebDensity65.setOnClickListener { setWebViewDensityMode(4) }
+    }
+
+    private fun updateWebDensityButtonSelection() {
+        val accent = ContextCompat.getColor(this, R.color.colorPrimary)
+        val normal = ContextCompat.getColor(this, R.color.chip_stroke)
+        val buttons = listOf(
+            binding.btnWebDensityStandard,
+            binding.btnWebDensity92,
+            binding.btnWebDensity85,
+            binding.btnWebDensity75,
+            binding.btnWebDensity65
+        )
+        buttons.forEach { it.strokeColor = ColorStateList.valueOf(normal) }
+        val selected = when (webViewDensityMode) {
+            0 -> binding.btnWebDensityStandard
+            1 -> binding.btnWebDensity92
+            2 -> binding.btnWebDensity85
+            3 -> binding.btnWebDensity75
+            4 -> binding.btnWebDensity65
+            else -> binding.btnWebDensityStandard
+        }
+        selected.strokeColor = ColorStateList.valueOf(accent)
     }
 
     // ==================== AD BLOCKING ====================
@@ -512,6 +744,100 @@ class MainActivity : AppCompatActivity() {
         return adDomains.any { lower.contains(it) } ||
                adPaths.any { lower.contains(it) } ||
                adPatterns.any { lower.contains(it) }
+    }
+
+    /**
+     * Heuristik für Sortierung: höherer Score = oft bessere Qualität (1080 vor 720, HLS-Master etc.).
+     * Kein Garant — CDNs codieren Auflösung unterschiedlich.
+     */
+    private fun scoreVideoUrl(url: String): Int {
+        val l = url.lowercase()
+        var score = 0
+        if (l.contains(".m3u8")) score += 800
+        if (l.contains(".mpd")) score += 750
+        when {
+            l.contains("2160") || l.contains("3840") || l.contains("4k") || l.contains("uhd") -> score += 4000
+            l.contains("1440") -> score += 3500
+            l.contains("1080") || l.contains("fullhd") -> score += 3000
+            l.contains("720") -> score += 2000
+            l.contains("480") -> score += 1000
+            l.contains("360") -> score += 500
+            l.contains("240") -> score += 250
+        }
+        if (l.contains("master") || (l.contains("index") && l.contains("m3u8"))) score += 200
+        return score
+    }
+
+    private fun inferQualityHint(url: String): String {
+        val l = url.lowercase()
+        return when {
+            Regex("""(2160|3840|4k|uhd)""").containsMatchIn(l) -> "4K/UHD"
+            l.contains("1440") -> "1440p"
+            l.contains("1080") || l.contains("fullhd") -> "1080p"
+            l.contains("720") -> "720p"
+            l.contains("480") -> "480p"
+            l.contains("360") -> "360p"
+            l.contains("240") -> "240p"
+            l.contains("master") -> "Master"
+            else -> getString(R.string.video_quality_unknown)
+        }
+    }
+
+    /** Länge vom Player (HTML5-Video), z. B. „15:30 min“ oder „1:05:00 h“. */
+    private fun formatVideoDurationLabel(durationSec: Float): String {
+        if (durationSec.isNaN() || durationSec <= 0f || durationSec.isInfinite()) return ""
+        val t = durationSec.toInt().coerceIn(0, Int.MAX_VALUE)
+        val h = t / 3600
+        val m = (t % 3600) / 60
+        val s = t % 60
+        return if (h > 0) String.format("%d:%02d:%02d h", h, m, s)
+        else String.format("%d:%02d min", m, s)
+    }
+
+    /** Kurz für Play-Dialog: Auflösung/Typ, ohne URL. */
+    private fun inferPlayQualityLabel(url: String): String {
+        val l = url.lowercase()
+        return when {
+            Regex("""(2160|3840|4k|uhd)""").containsMatchIn(l) -> "4K"
+            l.contains("1440") -> "1440p"
+            l.contains("1080") || l.contains("fullhd") -> "1080p"
+            l.contains("720") -> "720p"
+            l.contains("480") -> "480p"
+            l.contains("360") -> "360p"
+            l.contains("240") -> "240p"
+            l.contains("master") || (l.contains("index") && l.contains("m3u8")) -> "HLS"
+            l.contains(".m3u8") -> "HLS"
+            l.contains(".mpd") -> "DASH"
+            l.contains(".mp4") -> "MP4"
+            l.contains(".webm") -> "WEBM"
+            else -> "?"
+        }
+    }
+
+    /** Eine Zeile: „720p · 15:30 min“ bzw. nur Qualität wenn Länge unbekannt. */
+    private fun formatPlaySourceLine(url: String, pageDurationSec: Float): String {
+        val q = inferPlayQualityLabel(url)
+        val dur = formatVideoDurationLabel(pageDurationSec)
+        return if (dur.isNotEmpty()) "$q · $dur" else q
+    }
+
+    private fun formatVideoSourceLabel(url: String, index: Int, total: Int): String {
+        val type = when {
+            url.contains(".m3u8", true) -> "HLS"
+            url.contains(".mpd", true) -> "DASH"
+            url.contains(".mp4", true) -> "MP4"
+            url.contains(".webm", true) -> "WEBM"
+            else -> "Video"
+        }
+        val hint = inferQualityHint(url)
+        val host = try {
+            Uri.parse(url).host?.removePrefix("www.")?.take(28) ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+        val tail = if (url.length > 52) "…${url.takeLast(50)}" else url
+        val hostPart = if (host.isNotEmpty()) " · $host" else ""
+        return "$index/$total · $type · $hint$hostPart\n$tail"
     }
 
     // ==================== COMFORT SCRIPTS ====================
@@ -780,7 +1106,8 @@ class MainActivity : AppCompatActivity() {
             totalFound == 1 -> {
                 // Nur eine URL - direkt downloaden
                 if (allDirect.isNotEmpty()) {
-                    videoDownloadHelper.downloadDirect(allDirect.first(), webView.url, webView.settings.userAgentString)
+                    val did = videoDownloadHelper.downloadDirect(allDirect.first(), webView.url, webView.settings.userAgentString)
+                    trackedDownloadIds.add(did)
                     Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
                 } else {
                     startHlsDownload(allStreams.first())
@@ -794,34 +1121,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDownloadDialog(directUrls: List<String>, streamUrls: List<String>) {
-        val items = mutableListOf<Pair<String, String>>() // label -> url
-
-        directUrls.forEachIndexed { i, url ->
-            val ext = when {
-                url.lowercase().contains(".mp4") -> "MP4"
-                url.lowercase().contains(".webm") -> "WEBM"
-                else -> "Video"
-            }
-            val shortUrl = if (url.length > 60) "...${url.takeLast(50)}" else url
-            items.add("[$ext] Video ${i + 1} - $shortUrl" to url)
+        val sortedDirect = directUrls.sortedWith(compareByDescending { scoreVideoUrl(it) })
+        val sortedStreams = streamUrls.sortedWith(compareByDescending { scoreVideoUrl(it) })
+        val items = mutableListOf<Pair<String, String>>()
+        val total = sortedDirect.size + sortedStreams.size
+        var idx = 1
+        sortedDirect.forEach { url ->
+            items.add(formatVideoSourceLabel(url, idx, total) to url)
+            idx++
         }
-
-        streamUrls.forEachIndexed { i, url ->
-            val shortUrl = if (url.length > 60) "...${url.takeLast(50)}" else url
-            items.add("[HLS Stream] ${i + 1} - $shortUrl" to url)
+        sortedStreams.forEach { url ->
+            items.add(formatVideoSourceLabel(url, idx, total) to url)
+            idx++
         }
 
         val labels = items.map { it.first }.toTypedArray()
 
         AlertDialog.Builder(this)
-            .setTitle("${items.size} Videos gefunden")
+            .setTitle(getString(R.string.download_sources_title, items.size))
+            .setMessage(R.string.video_sources_message)
             .setItems(labels) { _, which ->
-                val (label, url) = items[which]
-                if (label.startsWith("[HLS")) {
-                    startHlsDownload(url)
-                } else {
-                    videoDownloadHelper.downloadDirect(url, webView.url, webView.settings.userAgentString)
-                    Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
+                val (_, url) = items[which]
+                when {
+                    url.contains(".m3u8", true) -> startHlsDownload(url)
+                    videoDownloadHelper.isDashUrl(url) -> {
+                        AlertDialog.Builder(this)
+                            .setTitle(R.string.dash_download_title)
+                            .setMessage(R.string.dash_download_message)
+                            .setPositiveButton(R.string.ok, null)
+                            .show()
+                    }
+                    else -> {
+                        val did = videoDownloadHelper.downloadDirect(url, webView.url, webView.settings.userAgentString)
+                        trackedDownloadIds.add(did)
+                        Toast.makeText(this, "Download gestartet!", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             .setNegativeButton("Abbrechen", null)
@@ -856,13 +1190,15 @@ class MainActivity : AppCompatActivity() {
     private fun registerDownloadReceiver() {
         downloadReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
-                if (intent?.action == DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-                    Toast.makeText(this@MainActivity, "Download abgeschlossen!", Toast.LENGTH_SHORT).show()
+                if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+                val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+                if (id < 0 || !trackedDownloadIds.remove(id)) return
+                Toast.makeText(this@MainActivity, "Download abgeschlossen!", Toast.LENGTH_SHORT).show()
             }
         }
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-            registerReceiver(downloadReceiver, filter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(downloadReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         else
             registerReceiver(downloadReceiver, filter)
     }
@@ -907,45 +1243,86 @@ class MainActivity : AppCompatActivity() {
 
     // ==================== FIRETV NAVIGATION ====================
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (!::webView.isInitialized) return super.onKeyDown(keyCode, event)
-
-        if (pointerMode && !isNavVisible && !isCategoryVisible && !isFullScreen && !isSplashVisible) {
-            val step = 22f * resources.displayMetrics.density
-            when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    movePointer(-step, 0f)
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    movePointer(step, 0f)
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    movePointer(0f, -step)
-                    return true
-                }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (::webView.isInitialized &&
+            pointerMode &&
+            !isNavVisible &&
+            !isCategoryVisible &&
+            !isFullScreen &&
+            !isSplashVisible
+        ) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT,
+                KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_DPAD_UP,
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    movePointer(0f, step)
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        val stepBase = 14f * resources.displayMetrics.density
+                        val step = stepBase + minOf(event.repeatCount, 20) * (2.5f * resources.displayMetrics.density)
+                        when (event.keyCode) {
+                            KeyEvent.KEYCODE_DPAD_LEFT -> movePointer(-step, 0f)
+                            KeyEvent.KEYCODE_DPAD_RIGHT -> movePointer(step, 0f)
+                            KeyEvent.KEYCODE_DPAD_UP -> movePointer(0f, -step)
+                            KeyEvent.KEYCODE_DPAD_DOWN -> movePointer(0f, step)
+                        }
+                    }
                     return true
                 }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    injectPointerClick()
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) injectPointerClick()
                     return true
                 }
                 KeyEvent.KEYCODE_BACK -> {
-                    disablePointerMode()
-                    Toast.makeText(this, R.string.mouse_mode_off, Toast.LENGTH_SHORT).show()
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        disablePointerMode()
+                        Toast.makeText(this, R.string.mouse_mode_off, Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_MENU -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        disablePointerMode()
+                        Toast.makeText(this, R.string.mouse_mode_off, Toast.LENGTH_SHORT).show()
+                    }
                     return true
                 }
             }
         }
+        return super.dispatchKeyEvent(event)
+    }
 
-        // Wenn Nav-Bar oder Category-Bar sichtbar ist: D-Pad steuert die Buttons
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (!::webView.isInitialized) return super.onKeyDown(keyCode, event)
+
+        // Site-Auswahl: komplette Fokus-Navigation (RecyclerView, Raster-Buttons) — nicht WebView-Logik
+        if (binding.siteSelector.visibility == View.VISIBLE) {
+            return super.onKeyDown(keyCode, event)
+        }
+
+        if (isSplashVisible) return super.onKeyDown(keyCode, event)
+
+        // Untere Leiste (Zoom + Icons) oder Kategorie-Leiste: D-Pad nur Fokus zwischen Buttons — nicht schließen
         if (isNavVisible || isCategoryVisible) {
             when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    // Auto-Hide Timer zuruecksetzen bei Navigation
+                KeyEvent.KEYCODE_BACK -> {
+                    if (isNavVisible) {
+                        hideNavBar()
+                        return true
+                    }
+                    if (isCategoryVisible) {
+                        hideCategoryBar()
+                        return true
+                    }
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT,
+                KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_DPAD_UP,
+                KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                     if (isNavVisible) {
                         handler.removeCallbacks(hideNavRunnable)
                         handler.postDelayed(hideNavRunnable, NAV_AUTO_HIDE_MS)
@@ -954,25 +1331,7 @@ class MainActivity : AppCompatActivity() {
                         handler.removeCallbacks(hideCategoryRunnable)
                         handler.postDelayed(hideCategoryRunnable, CATEGORY_AUTO_HIDE_MS)
                     }
-                    // Focus-Navigation dem Android-System ueberlassen
                     return super.onKeyDown(keyCode, event)
-                }
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (isNavVisible) { hideNavBar(); showCategoryBar(); return true }
-                    return super.onKeyDown(keyCode, event)
-                }
-                KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (isCategoryVisible) { hideCategoryBar(); return true }
-                    if (isNavVisible) { hideNavBar(); return true }
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    // Click auf fokussierten Button - Android-System handeln lassen
-                    return super.onKeyDown(keyCode, event)
-                }
-                KeyEvent.KEYCODE_BACK -> {
-                    if (isNavVisible) { hideNavBar(); return true }
-                    if (isCategoryVisible) { hideCategoryBar(); return true }
                 }
             }
         }
@@ -996,8 +1355,9 @@ class MainActivity : AppCompatActivity() {
                 scrollWebView("right", 200)
                 return true
             }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                clickFocusedElement()
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (event?.repeatCount != 0) return true
+                okCenterLongPressConsumed = false
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {
@@ -1007,12 +1367,9 @@ class MainActivity : AppCompatActivity() {
                 if (webView.canGoBack()) { webView.goBack(); return true }
                 showSiteSelectorAgain(); return true
             }
-            KeyEvent.KEYCODE_MENU -> {
-                if (pointerMode) {
-                    disablePointerMode()
-                    Toast.makeText(this, R.string.mouse_mode_off, Toast.LENGTH_SHORT).show()
-                    return true
-                }
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_TV,
+            KeyEvent.KEYCODE_INFO -> {
                 if (event?.repeatCount == 0) {
                     handler.postDelayed({
                         if (!isMenuLongPress) toggleNavBar()
@@ -1031,7 +1388,66 @@ class MainActivity : AppCompatActivity() {
 
     private var isMenuLongPress = false
 
+    /** OK kurz = Klick, OK lang = Schnellaktionen (Maus / Play). */
+    private var okCenterLongPressConsumed = false
+
+    private fun isOkSelectKey(keyCode: Int): Boolean = when (keyCode) {
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> true
+        else -> false
+    }
+
+    private fun showQuickActionsDialog() {
+        val items = arrayOf(
+            getString(R.string.quick_action_change_source),
+            getString(R.string.quick_action_mouse),
+            getString(R.string.quick_action_play)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.quick_actions_title)
+            .setItems(items) { _, which ->
+                hideNavBar()
+                hideCategoryBar()
+                when (which) {
+                    0 -> showSiteSelectorAgain()
+                    1 -> togglePointerModeFromToolbar()
+                    2 -> manualPlayVideo()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (!::webView.isInitialized) return super.onKeyUp(keyCode, event)
+        if (!isOkSelectKey(keyCode)) return super.onKeyUp(keyCode, event)
+
+        if (binding.siteSelector.visibility == View.VISIBLE) return super.onKeyUp(keyCode, event)
+        if (isNavVisible || isCategoryVisible) return super.onKeyUp(keyCode, event)
+        if (pointerMode) return super.onKeyUp(keyCode, event)
+        if (isSplashVisible) return super.onKeyUp(keyCode, event)
+
+        if (!okCenterLongPressConsumed) {
+            val down = event?.downTime ?: 0L
+            val up = event?.eventTime ?: 0L
+            if (up - down < ViewConfiguration.getLongPressTimeout()) {
+                clickFocusedElement()
+            }
+        }
+        okCenterLongPressConsumed = false
+        return true
+    }
+
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isOkSelectKey(keyCode)) {
+            if (!::webView.isInitialized) return super.onKeyLongPress(keyCode, event)
+            if (binding.siteSelector.visibility == View.VISIBLE) return super.onKeyLongPress(keyCode, event)
+            if (isNavVisible || isCategoryVisible) return super.onKeyLongPress(keyCode, event)
+            if (pointerMode) return super.onKeyLongPress(keyCode, event)
+            if (isFullScreen || isSplashVisible) return super.onKeyLongPress(keyCode, event)
+            okCenterLongPressConsumed = true
+            showQuickActionsDialog()
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             isMenuLongPress = true
             addCurrentVideoToFavorites()
@@ -1050,25 +1466,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSiteSelectorAgain() {
+        activeSitePlugin = null
         disablePointerMode()
         if (::webView.isInitialized) {
             webView.stopLoading()
+            webView.clearFocus()
+            webView.isFocusable = false
+            webView.isFocusableInTouchMode = false
             webView.loadUrl("about:blank")
         }
         isSplashVisible = true
         isNavVisible = false
         isCategoryVisible = false
-        binding.buttonContainer.visibility = View.GONE
+        binding.bottomNavStack.visibility = View.GONE
         binding.topBarContainer.visibility = View.GONE
         binding.splashOverlay.alpha = 1f
         binding.splashOverlay.visibility = View.VISIBLE
         binding.siteSelector.visibility = View.VISIBLE
         binding.loadingIndicator.visibility = View.GONE
-        binding.rvSitePicker.post { binding.rvSitePicker.getChildAt(0)?.requestFocus() }
+        loadSiteGridPref()
+        loadWebViewDensityPref()
+        applySitePickerLayout()
+        updateSiteLayoutButtonSelection()
+        updateWebDensityButtonSelection()
+        binding.rvSitePicker.post {
+            binding.rvSitePicker.getChildAt(0)?.requestFocus()
+                ?: binding.rvSitePicker.requestFocus()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        autoPlayRunnable?.let { handler.removeCallbacks(it) }
         handler.removeCallbacksAndMessages(null)
         downloadReceiver?.let { unregisterReceiver(it) }
         customViewCallback?.onCustomViewHidden()
@@ -1083,7 +1512,8 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun downloadVideo(url: String) {
             CoroutineScope(Dispatchers.Main).launch {
-                videoDownloadHelper.downloadDirect(url, webView.url, webView.settings.userAgentString)
+                val did = videoDownloadHelper.downloadDirect(url, webView.url, webView.settings.userAgentString)
+                trackedDownloadIds.add(did)
             }
         }
 
@@ -1105,6 +1535,7 @@ class MainActivity : AppCompatActivity() {
         fun reportVideoUrl(url: String) {
             synchronized(capturedDirectUrls) {
                 if (!capturedDirectUrls.contains(url)) capturedDirectUrls.add(url)
+                while (capturedDirectUrls.size > MAX_CAPTURED_URLS) capturedDirectUrls.removeAt(0)
             }
         }
 
@@ -1112,6 +1543,7 @@ class MainActivity : AppCompatActivity() {
         fun reportStreamUrl(url: String) {
             synchronized(capturedStreamUrls) {
                 if (!capturedStreamUrls.contains(url)) capturedStreamUrls.add(url)
+                while (capturedStreamUrls.size > MAX_CAPTURED_URLS) capturedStreamUrls.removeAt(0)
             }
         }
     }
@@ -1143,10 +1575,11 @@ class MainActivity : AppCompatActivity() {
     // ==================== EXOPLAYER LAUNCH ====================
 
     private fun autoPlayVideo() {
-        // Nur auf echten Video-Seiten starten (nicht Uebersichtsseiten)
-        // Warte kurz bis die Seite fertig geladen hat und Video-URLs aufgetaucht sind
-        handler.postDelayed({
-            if (!::webView.isInitialized) return@postDelayed
+        autoPlayRunnable?.let { handler.removeCallbacks(it) }
+        autoPlayRunnable = Runnable {
+            if (isFinishing) return@Runnable
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return@Runnable
+            if (!::webView.isInitialized) return@Runnable
 
             webView.evaluateJavascript("""
                 (function() {
@@ -1193,7 +1626,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        }, 2000) // 2 Sekunden warten
+        }
+        handler.postDelayed(autoPlayRunnable!!, 2000)
     }
 
     private fun injectVideoClickInterceptor() {
@@ -1258,7 +1692,17 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "Suche Video...", Toast.LENGTH_SHORT).show()
         webView.evaluateJavascript("""
             (function() {
-                var result = { direct: [], streams: [] };
+                var result = { direct: [], streams: [], durationSec: -1 };
+
+                // Geschätzte Abspieldauer (größtes gültiges video.duration)
+                document.querySelectorAll('video').forEach(function(v) {
+                    try {
+                        var d = v.duration;
+                        if (typeof d === 'number' && !isNaN(d) && isFinite(d) && d > 0) {
+                            if (result.durationSec < 0 || d > result.durationSec) result.durationSec = d;
+                        }
+                    } catch (e) {}
+                });
 
                 // Video-Elemente
                 document.querySelectorAll('video').forEach(function(v) {
@@ -1310,11 +1754,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun handlePlayResult(jsResult: String?) {
         val allUrls = mutableListOf<String>()
+        var pageDurationSec = -1f
         try {
             val clean = jsResult?.trim()?.removeSurrounding("\"")
                 ?.replace("\\\"", "\"")?.replace("\\\\/", "/")?.replace("\\\\", "\\")
             if (clean != null && clean != "null") {
                 val json = org.json.JSONObject(clean)
+                val d = json.optDouble("durationSec", -1.0)
+                if (!d.isNaN() && d > 0.0) pageDurationSec = d.toFloat()
                 val streams = json.optJSONArray("streams")
                 val direct = json.optJSONArray("direct")
                 // HLS/Streams bevorzugen (bessere Qualitaet)
@@ -1333,21 +1780,18 @@ class MainActivity : AppCompatActivity() {
             allUrls.isEmpty() -> Toast.makeText(this, "Kein Video gefunden. Oeffne zuerst ein Video.", Toast.LENGTH_LONG).show()
             allUrls.size == 1 -> launchExoPlayer(allUrls.first())
             else -> {
-                // Mehrere URLs - Dialog
-                val labels = allUrls.mapIndexed { i, url ->
-                    val type = when {
-                        url.contains(".m3u8", true) -> "HLS"
-                        url.contains(".mp4", true) -> "MP4"
-                        url.contains(".webm", true) -> "WEBM"
-                        else -> "Video"
-                    }
-                    val short = if (url.length > 50) "...${url.takeLast(40)}" else url
-                    "[$type] ${i + 1}: $short"
+                val sorted = allUrls.sortedWith(compareByDescending { scoreVideoUrl(it) })
+                Toast.makeText(this, getString(R.string.video_sources_toast, sorted.size), Toast.LENGTH_LONG).show()
+                val rawLines = sorted.map { formatPlaySourceLine(it, pageDurationSec) }
+                val labels = rawLines.mapIndexed { i, line ->
+                    val dup = rawLines.indices.count { rawLines[it] == line } > 1
+                    if (dup) "$line (${i + 1})" else line
                 }.toTypedArray()
 
                 AlertDialog.Builder(this)
-                    .setTitle("${allUrls.size} Videos gefunden")
-                    .setItems(labels) { _, which -> launchExoPlayer(allUrls[which]) }
+                    .setTitle(getString(R.string.video_sources_title, sorted.size))
+                    .setMessage(R.string.video_sources_play_hint)
+                    .setItems(labels) { _, which -> launchExoPlayer(sorted[which]) }
                     .setNegativeButton("Abbrechen", null)
                     .show()
             }
@@ -1387,57 +1831,125 @@ class MainActivity : AppCompatActivity() {
         val db = DialogFavoritesBinding.inflate(layoutInflater)
         val dialog = AlertDialog.Builder(this).setView(db.root).setCancelable(true).create()
 
+        lateinit var videoAdapter: FavoriteVideosAdapter
+        lateinit var actorAdapter: FavoriteActorsAdapter
+        videoAdapter = FavoriteVideosAdapter(
+            onOpen = { v ->
+                dialog.dismiss()
+                loadUrlInWebView(v.id)
+            },
+            onRemove = { v ->
+                favoritesManager.removeFavoriteVideo(v.id)
+                refreshFavoritesPanel(db, videoAdapter, actorAdapter)
+            }
+        )
+        actorAdapter = FavoriteActorsAdapter(
+            onOpen = { a ->
+                dialog.dismiss()
+                val url = when {
+                    a.id.startsWith("http://", true) || a.id.startsWith("https://", true) -> a.id
+                    websiteUrl.isNotEmpty() -> "${websiteUrl.trimEnd('/')}/${a.id.trimStart('/')}"
+                    currentSiteDomain.isNotEmpty() -> "https://$currentSiteDomain/${a.id.trimStart('/')}"
+                    else -> a.id
+                }
+                loadUrlInWebView(url)
+            },
+            onRemove = { a ->
+                favoritesManager.removeFavoriteActor(a.id)
+                refreshFavoritesPanel(db, videoAdapter, actorAdapter)
+            }
+        )
+
+        db.recyclerFavoriteVideos.layoutManager = LinearLayoutManager(this)
+        db.recyclerFavoriteVideos.adapter = videoAdapter
+        db.recyclerFavoriteActors.layoutManager = LinearLayoutManager(this)
+        db.recyclerFavoriteActors.adapter = actorAdapter
+
         db.btnCloseFavorites.setOnClickListener { dialog.dismiss() }
 
         db.favoritesTabLayout.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab?) {
                 when (tab?.position) {
-                    0 -> { db.videosTabContent.visibility = View.VISIBLE; db.actorsTabContent.visibility = View.GONE; loadFavs(db) }
-                    1 -> { db.videosTabContent.visibility = View.GONE; db.actorsTabContent.visibility = View.VISIBLE; loadActors(db) }
+                    0 -> {
+                        db.videosTabContent.visibility = View.VISIBLE
+                        db.actorsTabContent.visibility = View.GONE
+                        refreshFavoritesPanel(db, videoAdapter, actorAdapter)
+                    }
+                    1 -> {
+                        db.videosTabContent.visibility = View.GONE
+                        db.actorsTabContent.visibility = View.VISIBLE
+                        refreshFavoritesPanel(db, videoAdapter, actorAdapter)
+                    }
                 }
             }
             override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
             override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
         })
 
-        db.btnExportFavorites.setOnClickListener { exportFavorites(); Toast.makeText(this, "Exportiert!", Toast.LENGTH_SHORT).show() }
+        db.btnExportFavorites.setOnClickListener {
+            exportFavorites()
+            Toast.makeText(this, "Exportiert!", Toast.LENGTH_SHORT).show()
+        }
         db.btnClearFavorites.setOnClickListener {
             AlertDialog.Builder(this).setTitle("Alle loeschen?").setMessage("Wirklich alle Favoriten loeschen?")
-                .setPositiveButton("Ja") { _, _ -> favoritesManager.clearAllFavorites(); Toast.makeText(this, "Geloescht", Toast.LENGTH_SHORT).show(); dialog.dismiss() }
+                .setPositiveButton("Ja") { _, _ ->
+                    favoritesManager.clearAllFavorites()
+                    Toast.makeText(this, "Geloescht", Toast.LENGTH_SHORT).show()
+                    dialog.dismiss()
+                }
                 .setNegativeButton("Nein", null).show()
         }
 
         db.videosTabContent.visibility = View.VISIBLE
         db.actorsTabContent.visibility = View.GONE
-        loadFavs(db)
+        refreshFavoritesPanel(db, videoAdapter, actorAdapter)
         dialog.show()
     }
 
-    private fun loadFavs(db: DialogFavoritesBinding) {
+    private fun refreshFavoritesPanel(
+        db: DialogFavoritesBinding,
+        videoAdapter: FavoriteVideosAdapter,
+        actorAdapter: FavoriteActorsAdapter
+    ) {
         val v = favoritesManager.getFavoriteVideos()
+        val a = favoritesManager.getFavoriteActors()
+        videoAdapter.submitList(v)
+        actorAdapter.submitList(a)
         db.recyclerFavoriteVideos.visibility = if (v.isEmpty()) View.GONE else View.VISIBLE
         db.emptyVideosState.visibility = if (v.isEmpty()) View.VISIBLE else View.GONE
-    }
-
-    private fun loadActors(db: DialogFavoritesBinding) {
-        val a = favoritesManager.getFavoriteActors()
         db.recyclerFavoriteActors.visibility = if (a.isEmpty()) View.GONE else View.VISIBLE
         db.emptyActorsState.visibility = if (a.isEmpty()) View.VISIBLE else View.GONE
     }
 
     private fun exportFavorites() {
-        val json = StringBuilder().apply {
-            appendLine("{")
-            appendLine("  \"videos\": [")
-            favoritesManager.getFavoriteVideos().forEachIndexed { i, v ->
-                appendLine("    {\"id\":\"${v.id}\",\"title\":\"${v.title}\"}${if (i < favoritesManager.getFavoriteVideos().lastIndex) "," else ""}")
-            }
-            appendLine("  ],\"actors\": [")
-            favoritesManager.getFavoriteActors().forEachIndexed { i, a ->
-                appendLine("    {\"id\":\"${a.id}\",\"name\":\"${a.name}\"}${if (i < favoritesManager.getFavoriteActors().lastIndex) "," else ""}")
-            }
-            appendLine("  ]}")
-        }.toString()
+        val videosArr = JSONArray()
+        favoritesManager.getFavoriteVideos().forEach { v ->
+            videosArr.put(
+                JSONObject().apply {
+                    put("id", v.id)
+                    put("title", v.title)
+                    put("thumbnailUrl", v.thumbnailUrl)
+                    put("duration", v.duration)
+                    put("addedAt", v.addedAt)
+                }
+            )
+        }
+        val actorsArr = JSONArray()
+        favoritesManager.getFavoriteActors().forEach { a ->
+            actorsArr.put(
+                JSONObject().apply {
+                    put("id", a.id)
+                    put("name", a.name)
+                    put("imageUrl", a.imageUrl)
+                    put("addedAt", a.addedAt)
+                }
+            )
+        }
+        val root = JSONObject().apply {
+            put("videos", videosArr)
+            put("actors", actorsArr)
+        }
+        val json = root.toString(2)
         val clip = android.content.ClipData.newPlainText("BTBF Favorites", json)
         (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
     }
@@ -1471,5 +1983,12 @@ class MainActivity : AppCompatActivity() {
                 } catch (e: Exception) { Toast.makeText(this, "Fehler: ${e.message}", Toast.LENGTH_SHORT).show() }
             }
         }
+    }
+
+    companion object {
+        private const val PREF_SITE_GRID_COLUMNS = "site_grid_columns"
+        private const val PREF_WEBVIEW_DENSITY = "webview_density_mode"
+        private const val PREF_WEBVIEW_DENSITY_V2 = "webview_density_mode_v2"
+        private const val MAX_CAPTURED_URLS = 64
     }
 }

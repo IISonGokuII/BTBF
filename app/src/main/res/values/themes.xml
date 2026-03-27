@@ -13,5 +13,7 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
+        <!-- Fernbedienung / D-Pad: sichtbarer Fokus (Android TV, TCL, Fire TV) -->
+        <item name="android:colorControlHighlight">#66E85D04</item>
     </style>
 </resources>

@@ -2,6 +2,7 @@ package com.btbf.app
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
@@ -18,8 +19,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.btbf.app.databinding.ActivityBrowseBinding
 import com.btbf.app.scraper.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import com.btbf.app.site.SitePluginRegistry
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -38,6 +39,11 @@ class BrowseActivity : AppCompatActivity() {
     private var nextPageUrl: String? = null
     private var isLoadingMore = false
 
+    private lateinit var videoGridLayoutManager: GridLayoutManager
+    private val browsePrefs by lazy { getSharedPreferences("btbf_main", Context.MODE_PRIVATE) }
+    /** -1 = automatisch (Tablet 4 / Phone 3 Spalten), sonst 3–7 Spalten (mehr = kleinere Karten). */
+    private var browseGridColumnsPref = -1
+
     // Aktueller Ansichtsmodus
     private enum class ViewMode { VIDEOS, CATEGORIES, ACTORS }
     private var currentMode = ViewMode.VIDEOS
@@ -52,6 +58,8 @@ class BrowseActivity : AppCompatActivity() {
                 putExtra(EXTRA_SITE_URL, siteUrl)
             })
         }
+
+        private const val PREF_BROWSE_GRID = "browse_grid_columns"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,12 +81,10 @@ class BrowseActivity : AppCompatActivity() {
         favoritesManager = FavoritesManager(this)
         videoDownloadHelper = VideoDownloadHelper(this)
 
-        val innerScraper: SiteScraper = if (siteName == "BTBF") {
-            BtbfScraper()
-        } else {
-            GenericScraper(siteName, siteUrl)
-        }
-        scraper = HybridSiteScraper(this, innerScraper)
+        val plugin = SitePluginRegistry.byDisplayName(siteName)
+            ?: SitePluginRegistry.byBaseUrl(siteUrl)
+            ?: SitePluginRegistry.genericFallback(siteName, siteUrl)
+        scraper = plugin.createBrowsingScraper(this)
 
         binding.toolbar.title = siteName
         binding.toolbar.subtitle = try {
@@ -132,18 +138,18 @@ class BrowseActivity : AppCompatActivity() {
     }
 
     private fun setupGrid() {
-        val spanCount = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else 3
-        val layoutManager = GridLayoutManager(this, spanCount)
-
-        binding.videoGrid.layoutManager = layoutManager
+        loadBrowseGridPref()
+        val span = resolveSpanCount()
+        videoGridLayoutManager = GridLayoutManager(this, span)
+        binding.videoGrid.layoutManager = videoGridLayoutManager
         binding.videoGrid.adapter = videoAdapter
 
         // Infinite Scroll
         binding.videoGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 if (dy > 0 && !isLoadingMore && nextPageUrl != null && currentMode == ViewMode.VIDEOS) {
-                    val totalItems = layoutManager.itemCount
-                    val lastVisible = layoutManager.findLastVisibleItemPosition()
+                    val totalItems = videoGridLayoutManager.itemCount
+                    val lastVisible = videoGridLayoutManager.findLastVisibleItemPosition()
                     if (lastVisible >= totalItems - 6) {
                         loadMoreVideos()
                     }
@@ -151,10 +157,93 @@ class BrowseActivity : AppCompatActivity() {
             }
         })
 
+        setupBrowseGridDensityButtons()
+        updateBrowseGridDensityButtons()
+
         binding.btnRetry.setOnClickListener { loadHomePage() }
         binding.rvBrowseChips.post {
             binding.rvBrowseChips.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus()
         }
+    }
+
+    /** Nach TV-D-Pad: Fokus ins Raster, sobald Items da sind. */
+    private fun requestFocusFirstGridItem() {
+        if (binding.videoGrid.visibility != View.VISIBLE) return
+        binding.videoGrid.post {
+            val vh = binding.videoGrid.findViewHolderForAdapterPosition(0)
+            if (vh != null) {
+                vh.itemView.requestFocus()
+            } else {
+                binding.videoGrid.scrollToPosition(0)
+                binding.videoGrid.post {
+                    binding.videoGrid.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus()
+                }
+            }
+        }
+    }
+
+    private fun loadBrowseGridPref() {
+        val raw = browsePrefs.getInt(PREF_BROWSE_GRID, -1)
+        browseGridColumnsPref = when {
+            raw == -1 -> -1
+            else -> raw.coerceIn(3, 7)
+        }
+    }
+
+    private fun resolveSpanCount(): Int = when (browseGridColumnsPref) {
+        -1 -> if (resources.configuration.smallestScreenWidthDp >= 600) 4 else 3
+        else -> browseGridColumnsPref
+    }
+
+    private fun setBrowseGridColumns(cols: Int) {
+        browseGridColumnsPref = when (cols) {
+            -1 -> -1
+            else -> cols.coerceIn(3, 7)
+        }
+        browsePrefs.edit().putInt(PREF_BROWSE_GRID, browseGridColumnsPref).apply()
+        applyBrowseGridSpan()
+        updateBrowseGridDensityButtons()
+    }
+
+    private fun applyBrowseGridSpan() {
+        val span = resolveSpanCount()
+        if (videoGridLayoutManager.spanCount != span) {
+            videoGridLayoutManager.spanCount = span
+            binding.videoGrid.adapter?.notifyDataSetChanged()
+        }
+    }
+
+    private fun setupBrowseGridDensityButtons() {
+        binding.btnBrowseColsAuto.setOnClickListener { setBrowseGridColumns(-1) }
+        binding.btnBrowseCols3.setOnClickListener { setBrowseGridColumns(3) }
+        binding.btnBrowseCols4.setOnClickListener { setBrowseGridColumns(4) }
+        binding.btnBrowseCols5.setOnClickListener { setBrowseGridColumns(5) }
+        binding.btnBrowseCols6.setOnClickListener { setBrowseGridColumns(6) }
+        binding.btnBrowseCols7.setOnClickListener { setBrowseGridColumns(7) }
+    }
+
+    private fun updateBrowseGridDensityButtons() {
+        val accent = ContextCompat.getColor(this, R.color.colorPrimary)
+        val normal = ContextCompat.getColor(this, R.color.chip_stroke)
+        val buttons = listOf(
+            binding.btnBrowseColsAuto,
+            binding.btnBrowseCols3,
+            binding.btnBrowseCols4,
+            binding.btnBrowseCols5,
+            binding.btnBrowseCols6,
+            binding.btnBrowseCols7
+        )
+        buttons.forEach { it.strokeColor = ColorStateList.valueOf(normal) }
+        val selected = when (browseGridColumnsPref) {
+            -1 -> binding.btnBrowseColsAuto
+            3 -> binding.btnBrowseCols3
+            4 -> binding.btnBrowseCols4
+            5 -> binding.btnBrowseCols5
+            6 -> binding.btnBrowseCols6
+            7 -> binding.btnBrowseCols7
+            else -> binding.btnBrowseColsAuto
+        }
+        selected.strokeColor = ColorStateList.valueOf(accent)
     }
 
     private fun setupBrowseChips() {
@@ -216,7 +305,7 @@ class BrowseActivity : AppCompatActivity() {
         currentMode = ViewMode.CATEGORIES
         binding.videoGrid.adapter = categoryAdapter
         currentJob?.cancel()
-        currentJob = CoroutineScope(Dispatchers.Main).launch {
+        currentJob = lifecycleScope.launch {
             showLoading()
             val categories = scraper.getCategories()
             binding.loadingSpinner.visibility = View.GONE
@@ -228,6 +317,7 @@ class BrowseActivity : AppCompatActivity() {
                 binding.videoGrid.visibility = View.VISIBLE
                 categoryAdapter.setItems(categories)
                 binding.videoGrid.scrollToPosition(0)
+                requestFocusFirstGridItem()
             }
         }
     }
@@ -236,7 +326,7 @@ class BrowseActivity : AppCompatActivity() {
         currentMode = ViewMode.ACTORS
         binding.videoGrid.adapter = actorAdapter
         currentJob?.cancel()
-        currentJob = CoroutineScope(Dispatchers.Main).launch {
+        currentJob = lifecycleScope.launch {
             showLoading()
             val actors = scraper.getActors()
             binding.loadingSpinner.visibility = View.GONE
@@ -248,6 +338,7 @@ class BrowseActivity : AppCompatActivity() {
                 binding.videoGrid.visibility = View.VISIBLE
                 actorAdapter.setItems(actors)
                 binding.videoGrid.scrollToPosition(0)
+                requestFocusFirstGridItem()
             }
         }
     }
@@ -255,7 +346,7 @@ class BrowseActivity : AppCompatActivity() {
     private fun showTagsDialog() {
         Toast.makeText(this, "Lade Tags...", Toast.LENGTH_SHORT).show()
         currentJob?.cancel()
-        currentJob = CoroutineScope(Dispatchers.Main).launch {
+        currentJob = lifecycleScope.launch {
             val tags = scraper.getTags()
             if (tags.isEmpty()) {
                 Toast.makeText(this@BrowseActivity, "Keine Tags gefunden", Toast.LENGTH_SHORT).show()
@@ -297,13 +388,14 @@ class BrowseActivity : AppCompatActivity() {
         binding.videoGrid.visibility = View.VISIBLE
         videoAdapter.setVideos(videoItems)
         binding.videoGrid.scrollToPosition(0)
+        requestFocusFirstGridItem()
     }
 
     // ==================== LOADING ====================
 
     private fun loadHomePage() {
         currentJob?.cancel()
-        currentJob = CoroutineScope(Dispatchers.Main).launch {
+        currentJob = lifecycleScope.launch {
             showLoading()
             val result = scraper.getHomePage()
             showVideoResults(result)
@@ -312,7 +404,7 @@ class BrowseActivity : AppCompatActivity() {
 
     private fun loadPage(url: String) {
         currentJob?.cancel()
-        currentJob = CoroutineScope(Dispatchers.Main).launch {
+        currentJob = lifecycleScope.launch {
             showLoading()
             val result = scraper.getPage(url)
             showVideoResults(result)
@@ -321,7 +413,7 @@ class BrowseActivity : AppCompatActivity() {
 
     private fun loadSorted(sort: SortOrder) {
         currentJob?.cancel()
-        currentJob = CoroutineScope(Dispatchers.Main).launch {
+        currentJob = lifecycleScope.launch {
             showLoading()
             val result = scraper.getSorted(sort)
             showVideoResults(result)
@@ -330,7 +422,7 @@ class BrowseActivity : AppCompatActivity() {
 
     private fun searchVideos(query: String) {
         currentJob?.cancel()
-        currentJob = CoroutineScope(Dispatchers.Main).launch {
+        currentJob = lifecycleScope.launch {
             showLoading()
             val result = scraper.search(query)
             showVideoResults(result)
@@ -343,12 +435,17 @@ class BrowseActivity : AppCompatActivity() {
         isLoadingMore = true
         binding.loadMoreSpinner.visibility = View.VISIBLE
 
-        CoroutineScope(Dispatchers.Main).launch {
-            val result = scraper.getPage(url)
-            videoAdapter.addVideos(result.videos)
-            nextPageUrl = result.nextPageUrl
-            isLoadingMore = false
-            binding.loadMoreSpinner.visibility = View.GONE
+        lifecycleScope.launch {
+            try {
+                val result = scraper.getPage(url)
+                videoAdapter.addVideos(result.videos)
+                nextPageUrl = result.nextPageUrl
+            } catch (e: Exception) {
+                Toast.makeText(this@BrowseActivity, "Fehler: ${e.message ?: "Laden"}", Toast.LENGTH_LONG).show()
+            } finally {
+                isLoadingMore = false
+                binding.loadMoreSpinner.visibility = View.GONE
+            }
         }
     }
 
@@ -370,6 +467,7 @@ class BrowseActivity : AppCompatActivity() {
             binding.videoGrid.visibility = View.VISIBLE
             videoAdapter.setVideos(result.videos)
             binding.videoGrid.scrollToPosition(0)
+            requestFocusFirstGridItem()
         }
     }
 
@@ -378,22 +476,25 @@ class BrowseActivity : AppCompatActivity() {
     private fun openVideo(video: VideoItem) {
         Toast.makeText(this, "Lade: ${video.title}", Toast.LENGTH_SHORT).show()
 
-        CoroutineScope(Dispatchers.Main).launch {
-            val detail = scraper.getVideoDetail(video.pageUrl)
-            if (detail != null && detail.videoSources.isNotEmpty()) {
-                // Mehrere Quellen? Dialog zeigen
-                if (detail.videoSources.size > 1) {
-                    showSourcePicker(detail, video.pageUrl)
+        lifecycleScope.launch {
+            try {
+                val detail = scraper.getVideoDetail(video.pageUrl)
+                if (detail != null && detail.videoSources.isNotEmpty()) {
+                    if (detail.videoSources.size > 1) {
+                        showSourcePicker(detail, video.pageUrl)
+                    } else {
+                        launchPlayer(detail.videoSources.first().url, video.pageUrl, detail.title)
+                    }
+                } else if (detail != null && detail.videoSources.isEmpty()) {
+                    Toast.makeText(this@BrowseActivity,
+                        "Keine direkte Video-URL gefunden. Oeffne im Browser...",
+                        Toast.LENGTH_SHORT).show()
+                    openInWebView(video.pageUrl)
                 } else {
-                    launchPlayer(detail.videoSources.first().url, video.pageUrl, detail.title)
+                    Toast.makeText(this@BrowseActivity, "Fehler beim Laden", Toast.LENGTH_SHORT).show()
                 }
-            } else if (detail != null && detail.videoSources.isEmpty()) {
-                Toast.makeText(this@BrowseActivity,
-                    "Keine direkte Video-URL gefunden. Oeffne im Browser...",
-                    Toast.LENGTH_SHORT).show()
-                openInWebView(video.pageUrl)
-            } else {
-                Toast.makeText(this@BrowseActivity, "Fehler beim Laden", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@BrowseActivity, "Fehler: ${e.message ?: "Laden"}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -435,6 +536,7 @@ class BrowseActivity : AppCompatActivity() {
     private fun openInWebView(url: String) {
         val intent = Intent(this, MainActivity::class.java).apply {
             putExtra("fallback_url", url)
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         startActivity(intent)
     }
@@ -455,17 +557,21 @@ class BrowseActivity : AppCompatActivity() {
 
     private fun downloadVideo(video: VideoItem) {
         Toast.makeText(this, "Suche Download-URL...", Toast.LENGTH_SHORT).show()
-        CoroutineScope(Dispatchers.Main).launch {
-            val detail = scraper.getVideoDetail(video.pageUrl)
-            if (detail == null || detail.videoSources.isEmpty()) {
-                Toast.makeText(this@BrowseActivity, R.string.download_no_sources, Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            val sources = detail.videoSources
-            if (sources.size == 1) {
-                startDownloadWithSource(sources.first(), video)
-            } else {
-                showDownloadSourcePicker(sources, video)
+        lifecycleScope.launch {
+            try {
+                val detail = scraper.getVideoDetail(video.pageUrl)
+                if (detail == null || detail.videoSources.isEmpty()) {
+                    Toast.makeText(this@BrowseActivity, R.string.download_no_sources, Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val sources = detail.videoSources
+                if (sources.size == 1) {
+                    startDownloadWithSource(sources.first(), video)
+                } else {
+                    showDownloadSourcePicker(sources, video)
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this@BrowseActivity, "Fehler: ${e.message ?: "Download"}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -507,7 +613,7 @@ class BrowseActivity : AppCompatActivity() {
         when (source.type) {
             VideoSourceType.HLS -> {
                 Toast.makeText(this, "HLS Download gestartet...", Toast.LENGTH_SHORT).show()
-                CoroutineScope(Dispatchers.Main).launch {
+                lifecycleScope.launch {
                     videoDownloadHelper.downloadHlsStream(
                         m3u8Url = source.url,
                         referer = video.pageUrl,

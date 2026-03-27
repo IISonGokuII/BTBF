@@ -74,7 +74,7 @@ class VideoDownloadHelper(private val context: Context) {
         return lower.contains(".mpd") || lower.contains("type=application/dash+xml")
     }
 
-    fun downloadDirect(url: String, referer: String?, userAgent: String?, contentDisposition: String? = null, mimeType: String? = null) {
+    fun downloadDirect(url: String, referer: String?, userAgent: String?, contentDisposition: String? = null, mimeType: String? = null): Long {
         val fileName = if (contentDisposition != null) {
             URLUtil.guessFileName(url, contentDisposition, mimeType)
         } else {
@@ -96,7 +96,7 @@ class VideoDownloadHelper(private val context: Context) {
         }
 
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        dm.enqueue(request)
+        return dm.enqueue(request)
     }
 
     suspend fun downloadHlsStream(

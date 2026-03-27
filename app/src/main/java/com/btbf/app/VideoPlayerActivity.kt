@@ -10,6 +10,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -66,6 +67,11 @@ class VideoPlayerActivity : AppCompatActivity() {
         userAgent = intent.getStringExtra(EXTRA_USER_AGENT)
             ?: WebViewListingExtractor.DEFAULT_USER_AGENT
         pageUrlForFallback = referer.ifEmpty { videoUrl }
+
+        intent.getStringExtra(EXTRA_TITLE)?.trim()?.takeIf { it.isNotEmpty() }?.let { t ->
+            binding.videoTitleBar.text = t
+            binding.videoTitleBar.visibility = View.VISIBLE
+        }
 
         initializePlayer()
     }
@@ -150,7 +156,10 @@ class VideoPlayerActivity : AppCompatActivity() {
             .setPositiveButton(R.string.retry) { _, _ -> initializePlayer() }
             .setNeutralButton(R.string.open_in_browser) { _, _ ->
                 startActivity(
-                    Intent(this, MainActivity::class.java).putExtra("fallback_url", pageUrlForFallback)
+                    Intent(this, MainActivity::class.java).apply {
+                        putExtra("fallback_url", pageUrlForFallback)
+                        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
                 )
                 finish()
             }
@@ -179,7 +188,9 @@ class VideoPlayerActivity : AppCompatActivity() {
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                p.seekTo(minOf(p.duration, p.currentPosition + 10000))
+                val dur = p.duration
+                if (dur == C.TIME_UNSET || dur <= 0) return true
+                p.seekTo(minOf(dur, p.currentPosition + 10000))
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {

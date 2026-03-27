@@ -52,4 +52,36 @@
     <string name="cd_mouse_mode">Mausmodus ein oder aus</string>
     <string name="mouse_mode_on">Mausmodus: Kreuz bewegen mit Steuerkreuz, OK zum Klicken, Zurück oder Menü zum Beenden.</string>
     <string name="mouse_mode_off">Mausmodus aus.</string>
+
+    <string name="quick_actions_title">Schnellaktionen</string>
+    <string name="quick_action_mouse">Mausmodus ein oder aus</string>
+    <string name="quick_action_play">Video abspielen</string>
+    <string name="quick_action_change_source">Quelle wechseln</string>
+
+    <string name="site_layout_hint">Darstellung</string>
+    <string name="site_layout_list">Liste</string>
+    <string name="site_layout_2">2 Spalten</string>
+    <string name="site_layout_3">3 Spalten</string>
+
+    <string name="video_quality_unknown">Qualität unbekannt</string>
+    <string name="video_sources_title">%1$d Video-Quellen</string>
+    <string name="video_sources_message">Wählen Sie eine Zeile. Die Liste ist nach vermuteter Qualität sortiert (oben oft am besten). „HLS“ ist meist adaptiv; MP4 oft feste Qualität.</string>
+    <string name="video_sources_play_hint">Sortiert nach vermuteter Qualität (oben oft am besten).</string>
+    <string name="video_sources_toast">%1$d Quellen gefunden – bitte unten wählen.</string>
+    <string name="download_sources_title">%1$d Download-Quellen</string>
+
+    <string name="browse_grid_hint">Kartengröße — mehr Spalten = kleinere Karten</string>
+    <string name="browse_grid_auto">Auto</string>
+
+    <string name="webview_density_hint">Web-Ansicht (kleiner = mehr auf einmal)</string>
+    <string name="webview_density_standard">Standard</string>
+    <string name="webview_density_92">92%</string>
+    <string name="webview_density_85">85%</string>
+    <string name="webview_density_75">75%</string>
+    <string name="webview_density_65">65%</string>
+
+    <string name="tv_help_dpad">Steuerkreuz: Seite / Fokus</string>
+    <string name="tv_help_ok">OK: Auswählen</string>
+    <string name="tv_help_menu">Menü oder TV-Taste: Leiste unten (Zoom + Aktionen)</string>
+    <string name="tv_help_back">Zurück: Schließen / eine Seite zurück</string>
 </resources>

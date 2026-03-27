@@ -60,6 +60,113 @@
                 </com.google.android.material.textfield.TextInputLayout>
             </LinearLayout>
 
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="4dp"
+                android:text="@string/browse_grid_hint"
+                android:textColor="@color/text_hint"
+                android:textSize="12sp" />
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fillViewport="true"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="6dp"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/browseGridDensityRow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBrowseColsAuto"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:text="@string/browse_grid_auto"
+                        android:textSize="12sp"
+                        app:strokeColor="@color/chip_stroke" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBrowseCols3"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:text="3"
+                        android:textSize="12sp"
+                        app:strokeColor="@color/chip_stroke" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBrowseCols4"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:text="4"
+                        android:textSize="12sp"
+                        app:strokeColor="@color/chip_stroke" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBrowseCols5"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:text="5"
+                        android:textSize="12sp"
+                        app:strokeColor="@color/chip_stroke" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBrowseCols6"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:text="6"
+                        android:textSize="12sp"
+                        app:strokeColor="@color/chip_stroke" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBrowseCols7"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:minWidth="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:text="7"
+                        android:textSize="12sp"
+                        app:strokeColor="@color/chip_stroke" />
+                </LinearLayout>
+            </HorizontalScrollView>
+
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rvBrowseChips"
                 android:layout_width="match_parent"
@@ -81,6 +188,9 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:clipToPadding="false"
+                android:descendantFocusability="afterDescendants"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
                 android:padding="8dp" />
 
             <ProgressBar
