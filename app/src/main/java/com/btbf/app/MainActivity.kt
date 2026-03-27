@@ -39,7 +39,6 @@ import android.widget.ArrayAdapter
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
@@ -1358,7 +1357,13 @@ class MainActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                 if (event?.repeatCount != 0) return true
-                okCenterLongPressConsumed = false
+                return true
+            }
+            // Kontextmenü (Quelle, Maus, Play): nur INFO — Menü/TV-Taste nicht mischen
+            KeyEvent.KEYCODE_INFO -> {
+                if (event?.repeatCount != 0) return true
+                if (isFullScreen) return super.onKeyDown(keyCode, event)
+                showQuickActionsDialog()
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {
@@ -1368,9 +1373,8 @@ class MainActivity : AppCompatActivity() {
                 if (webView.canGoBack()) { webView.goBack(); return true }
                 showSiteSelectorAgain(); return true
             }
-            KeyEvent.KEYCODE_MENU,
-            KeyEvent.KEYCODE_TV,
-            KeyEvent.KEYCODE_INFO -> {
+            // Untere Leiste nur TV-Taste — Menü-Taste nicht (sonst doppeltes „Menü“-Gefühl)
+            KeyEvent.KEYCODE_TV -> {
                 if (event?.repeatCount == 0) {
                     handler.postDelayed({
                         if (!isMenuLongPress) toggleNavBar()
@@ -1379,6 +1383,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 return true
             }
+            KeyEvent.KEYCODE_MENU -> return super.onKeyDown(keyCode, event)
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 manualPlayVideo()
                 return true
@@ -1388,9 +1393,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var isMenuLongPress = false
-
-    /** OK kurz = Klick, OK lang = Schnellaktionen (Maus / Play). */
-    private var okCenterLongPressConsumed = false
 
     private fun isOkSelectKey(keyCode: Int): Boolean = when (keyCode) {
         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> true
@@ -1405,12 +1407,13 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.quick_action_mouse),
             getString(R.string.quick_action_play)
         )
-        // MaterialComponents-Theme + AlertDialog.Builder crasht auf manchen TV-Geraeten; nach Main-Loop zeigen.
+        // System-Dialog (DeviceDefault) — MaterialAlertDialog + TV/WebView crasht auf manchen Geraeten.
         handler.post {
             if (isFinishing) return@post
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return@post
             try {
-                MaterialAlertDialogBuilder(this)
+                @Suppress("DEPRECATION")
+                android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                     .setTitle(R.string.quick_actions_title)
                     .setItems(items) { _, which ->
                         hideNavBar()
@@ -1423,7 +1426,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
-            } catch (_: Exception) { /* defensive: kein Absturz bei Dialog-Inflate */ }
+            } catch (_: Exception) { /* defensive */ }
         }
     }
 
@@ -1436,28 +1439,15 @@ class MainActivity : AppCompatActivity() {
         if (pointerMode) return super.onKeyUp(keyCode, event)
         if (isSplashVisible) return super.onKeyUp(keyCode, event)
 
-        if (!okCenterLongPressConsumed) {
-            val down = event?.downTime ?: 0L
-            val up = event?.eventTime ?: 0L
-            if (up - down < ViewConfiguration.getLongPressTimeout()) {
-                clickFocusedElement()
-            }
+        val down = event?.downTime ?: 0L
+        val up = event?.eventTime ?: 0L
+        if (up - down < ViewConfiguration.getLongPressTimeout()) {
+            clickFocusedElement()
         }
-        okCenterLongPressConsumed = false
         return true
     }
 
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean {
-        if (isOkSelectKey(keyCode)) {
-            if (!::webView.isInitialized) return super.onKeyLongPress(keyCode, event)
-            if (binding.siteSelector.visibility == View.VISIBLE) return super.onKeyLongPress(keyCode, event)
-            if (isNavVisible || isCategoryVisible) return super.onKeyLongPress(keyCode, event)
-            if (pointerMode) return super.onKeyLongPress(keyCode, event)
-            if (isFullScreen || isSplashVisible) return super.onKeyLongPress(keyCode, event)
-            okCenterLongPressConsumed = true
-            showQuickActionsDialog()
-            return true
-        }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             isMenuLongPress = true
             addCurrentVideoToFavorites()

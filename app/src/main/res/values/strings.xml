@@ -82,6 +82,7 @@
 
     <string name="tv_help_dpad">Steuerkreuz: Seite / Fokus</string>
     <string name="tv_help_ok">OK: Auswählen</string>
-    <string name="tv_help_menu">Menü oder TV-Taste: Leiste unten (Zoom + Aktionen)</string>
+    <string name="tv_help_menu">TV-Taste: Leiste unten (Zoom + Aktionen)</string>
+    <string name="tv_help_quick">INFO: Schnellaktionen (Quelle wechseln, Maus, Play)</string>
     <string name="tv_help_back">Zurück: Schließen / eine Seite zurück</string>
 </resources>
